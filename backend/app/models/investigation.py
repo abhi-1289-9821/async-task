@@ -125,6 +125,10 @@ class Finding(Base):
     finding_type: Mapped[str] = mapped_column(
         Enum(AgentFindingType, name="agent_finding_type_enum", create_constraint=True), nullable=False
     )
+    raw_ai_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    calculation_line_result_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("calculation_line_results.id", ondelete="SET NULL"), nullable=True
+    )
     # Structured AI outputs — stored separately for clarity
     verified_facts: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     possible_explanations: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
@@ -150,23 +154,30 @@ class Finding(Base):
 class FindingReview(Base):
     """
     Human review of a finding. Preserves original AI text; stores edits separately.
-    Credit approval requires decision=ACCEPT on a non-stale finding.
+    Credit approval requires action=ACCEPT on a non-stale finding.
     """
     __tablename__ = "finding_reviews"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     finding_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("findings.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    decision: Mapped[str] = mapped_column(
+    action: Mapped[str] = mapped_column(
         Enum(ReviewDecision, name="review_decision_enum", create_constraint=True), nullable=False
     )
     reviewer: Mapped[str] = mapped_column(String(50), nullable=False)  # "REVIEWER" identity
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    original_ai_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     edited_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # separate from AI text
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
+    @property
+    def reviewed_at(self) -> datetime:
+        return self.created_at
+
     finding: Mapped["Finding"] = relationship(back_populates="reviews")
+
+
 
 
 class ResolutionOption(Base):

@@ -77,3 +77,23 @@ Each entry: Phase, timestamp, category, event, fix, status.
 - **Fix**: Updated test assertions to catch `IntegrityError` with the exact trigger abort message. All 60 unit tests pass.
 - **Status**: resolved
 
+---
+
+## Phase 2
+
+### [Phase 2] [2026-10-13 13:53] — EvidenceVersion primary key type mismatch
+- **Event**: `transition_service.py` attempted to insert string `f"ev_{case_id}_v{version}"` into `EvidenceVersion.id`, which is an autoincrement `Integer` primary key. SQLite raised `IntegrityError: datatype mismatch`.
+- **Fix**: Removed manual string `id` assignment so SQLAlchemy and SQLite autoincrement the integer primary key cleanly.
+- **Status**: resolved
+
+### [Phase 2] [2026-10-13 13:54] — TierBand and UsageEvent signature mismatches
+- **Event**: `calculation_service.py` referenced `engine.PricingTier` (actual name is `engine.TierBand`) and passed `timestamp` to `engine.UsageEvent` (which does not take a timestamp).
+- **Fix**: Updated instantiation to `engine.TierBand(price_per_unit_cents=..., up_to=...)` and omitted timestamp from the pure calculation dataclass.
+- **Status**: resolved
+
+### [Phase 2] [2026-10-13 13:56] — Concurrency stress test verification
+- **Event**: Tested 10 parallel threads simultaneously executing `approve_credit` against the same overcharge line.
+- **Outcome**: Verified that exactly 1 thread succeeded with 201 Created, while the competing 9 threads were rejected via cap exhaustion or 409 idempotency key collision. Total credited amount in database strictly equaled the eligible overcharge (zero double-crediting).
+- **Status**: resolved
+
+

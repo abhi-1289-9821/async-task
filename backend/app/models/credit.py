@@ -57,6 +57,9 @@ class Credit(Base):
     case_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    invoice_line_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("invoice_lines.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     resolution_option_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("resolution_options.id", ondelete="SET NULL"), nullable=True
     )

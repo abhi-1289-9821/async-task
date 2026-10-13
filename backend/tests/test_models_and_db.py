@@ -202,12 +202,19 @@ class TestDatabaseSchemaAndConstraints:
             status=CaseStatus.OPEN,
             evidence_version=1
         )
-        db_session.add(case)
+        line = InvoiceLine(
+            id="line-cred-1",
+            case_id="case-credit-1",
+            description="Service fee",
+            original_amount_cents=500,
+        )
+        db_session.add_all([case, line])
         db_session.commit()
 
         c1 = Credit(
             id="cred-1",
             case_id="case-credit-1",
+            invoice_line_id="line-cred-1",
             amount_cents=500,
             reason_code="OVERCHARGE",
             approved_by="lead_auditor",
@@ -216,6 +223,7 @@ class TestDatabaseSchemaAndConstraints:
         c2 = Credit(
             id="cred-2",
             case_id="case-credit-1",
+            invoice_line_id="line-cred-1",
             amount_cents=500,
             reason_code="OVERCHARGE",
             approved_by="lead_auditor",
@@ -228,6 +236,7 @@ class TestDatabaseSchemaAndConstraints:
         with pytest.raises(IntegrityError):
             db_session.commit()
         db_session.rollback()
+
 
     def test_contract_rule_json_fields(self, db_session):
         """ContractRule JSON columns store and retrieve python dicts/lists without corruption."""

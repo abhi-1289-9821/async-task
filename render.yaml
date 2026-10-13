@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: billing-dispute-agent
+    runtime: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --app-dir backend
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
+      - key: ENVIRONMENT
+        value: production
+      - key: LLM_MODE
+        value: real
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DEMO_REVIEWER_TOKEN
+        generateValue: true
+      - key: DEMO_VIEWER_TOKEN
+        generateValue: true

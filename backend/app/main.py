@@ -84,10 +84,15 @@ if os.path.isdir(FRONTEND_DIST):
             or full_path in ("docs", "redoc", "openapi.json")
         ):
             raise HTTPException(status_code=404, detail="Not Found")
-        file_path = os.path.join(FRONTEND_DIST, full_path)
-        if full_path and os.path.isfile(file_path):
+
+        root = os.path.realpath(FRONTEND_DIST)
+        file_path = os.path.realpath(os.path.join(root, full_path))
+
+        # Containment check: prevent path traversal attacks (e.g. /../../backend/requirements.txt)
+        if file_path.startswith(root + os.sep) and os.path.isfile(file_path):
             return FileResponse(file_path)
-        index_file = os.path.join(FRONTEND_DIST, "index.html")
+
+        index_file = os.path.join(root, "index.html")
         if os.path.isfile(index_file):
             return FileResponse(index_file)
         raise HTTPException(status_code=404, detail="Frontend index.html not found")

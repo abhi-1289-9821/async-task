@@ -230,6 +230,19 @@ class InvestigationWorkflow:
                 rf, calc_status, total_diff, line_results
             )
 
+            # 3. Narrative monetary check: catch hallucinated or unanchored dollar amounts
+            summary_calc = {
+                "total_original_billed_cents": state.get("total_original_billed_cents", 0),
+                "total_recalculated_cents": state.get("total_recalculated_cents", 0),
+                "total_difference_cents": total_diff,
+            }
+            narrative_passed, nar_errs = validator.validate_narrative_amounts(
+                rf, line_results, summary_calc
+            )
+            if not narrative_passed:
+                consist_passed = False
+                logger.warning("Narrative dollar amount validation failed: %s", nar_errs)
+
             f_copy = dict(rf)
             f_copy["citation_ids"] = sanitized_citations
             f_copy["citation_validation_passed"] = citation_passed
@@ -237,7 +250,7 @@ class InvestigationWorkflow:
             f_copy["finding_type"] = final_finding_type
             validated_findings.append(f_copy)
 
-        # 3. Sanitize resolution options
+        # 4. Sanitize resolution options
         raw_options = state.get("raw_options", [])
         validated_options = validator.sanitize_resolution_options(raw_options, line_results)
 

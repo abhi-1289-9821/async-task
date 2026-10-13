@@ -121,3 +121,89 @@ def sanitize_resolution_options(
         })
 
     return sanitized
+
+
+import re
+from decimal import Decimal
+
+
+def extract_monetary_amounts_cents(text: str) -> list[tuple[str, int]]:
+    """
+    Extracts explicit dollar ($X or $X.YY) and cent (X¢, X cents) amounts from narrative text.
+    Returns list of (raw_token, amount_cents).
+    """
+    if not text:
+        return []
+    results = []
+
+    # Match $50, $50.00, $0.50
+    dollar_matches = re.finditer(r"\$([0-9]+(?:\.[0-9]{1,2})?)", text)
+    for m in dollar_matches:
+        raw_str = m.group(0)
+        num_str = m.group(1)
+        try:
+            val_cents = int((Decimal(num_str) * 100).to_integral_value())
+            results.append((raw_str, val_cents))
+        except Exception:
+            pass
+
+    # Match 5000¢ or 5000 cents
+    cent_matches = re.finditer(r"\b([0-9]+)\s*(?:¢|cents)\b", text, re.IGNORECASE)
+    for m in cent_matches:
+        raw_str = m.group(0)
+        num_str = m.group(1)
+        try:
+            val_cents = int(num_str)
+            results.append((raw_str, val_cents))
+        except Exception:
+            pass
+
+    return results
+
+
+def validate_narrative_amounts(
+    finding: dict[str, Any],
+    line_results: list[dict[str, Any]],
+    summary: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    """
+    Scans AI finding narrative, facts, and explanations for fabricated dollar amounts.
+    All monetary values mentioned in the text must be anchored to numbers emitted
+    by the deterministic billing engine.
+    """
+    # Allow 0 and numbers calculated by deterministic engine
+    allowed_cents = {0}
+    for lr in line_results:
+        allowed_cents.add(lr.get("original_amount_cents", 0))
+        allowed_cents.add(lr.get("recalculated_amount_cents", 0))
+        allowed_cents.add(abs(lr.get("difference_cents", 0)))
+        if lr.get("applied_minimum_commit_cents"):
+            allowed_cents.add(lr["applied_minimum_commit_cents"])
+
+    if summary:
+        allowed_cents.add(summary.get("total_original_billed_cents", 0))
+        allowed_cents.add(summary.get("total_recalculated_cents", 0))
+        allowed_cents.add(abs(summary.get("total_difference_cents", 0)))
+
+    texts_to_scan = []
+    if finding.get("raw_ai_text"):
+        texts_to_scan.append(str(finding["raw_ai_text"]))
+    if finding.get("summary_narrative"):
+        texts_to_scan.append(str(finding["summary_narrative"]))
+    for f in finding.get("verified_facts") or []:
+        texts_to_scan.append(str(f))
+    for p in finding.get("possible_explanations") or []:
+        texts_to_scan.append(str(p))
+
+    unanchored = []
+    for text in texts_to_scan:
+        extracted = extract_monetary_amounts_cents(text)
+        for raw_token, cents in extracted:
+            if cents not in allowed_cents:
+                unanchored.append(
+                    f"Fabricated monetary amount '{raw_token}' ({cents}¢) detected in AI narrative; not anchored to engine calculation"
+                )
+
+    passed = (len(unanchored) == 0)
+    return passed, unanchored
+

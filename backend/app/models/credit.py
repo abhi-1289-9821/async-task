@@ -81,7 +81,7 @@ class Credit(Base):
 class Adjustment(Base):
     """
     A prior credit/discount applied by the account team before this dispute.
-    Used to compute the cumulative credit cap.
+    Used to compute the cumulative credit cap per invoice line or case-wide.
     Cannot be created by the billing agent.
     """
     __tablename__ = "adjustments"
@@ -90,9 +90,13 @@ class Adjustment(Base):
     case_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    invoice_line_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("invoice_lines.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     case: Mapped["Case"] = relationship(back_populates="adjustments")  # noqa: F821
+

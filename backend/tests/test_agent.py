@@ -354,6 +354,33 @@ class TestValidators:
         # Should be filtered out and defaulted to CLOSE_NO_ADJUSTMENT
         assert sanitized[0]["option_type"] == "CLOSE_NO_ADJUSTMENT"
 
+    def test_validate_narrative_amounts_detects_fabricated_dollars(self):
+        """Proves validator flags AI hallucinated monetary amounts not in engine calculation."""
+        from app.agent.validator import validate_narrative_amounts
+        line_results = [
+            {"original_amount_cents": 5000, "recalculated_amount_cents": 3000, "difference_cents": -2000}
+        ]
+        summary = {"total_original_billed_cents": 5000, "total_recalculated_cents": 3000, "total_difference_cents": -2000}
+
+        # 1. Anchored narrative passes (mentions $50.00, $30.00, $20.00, or 2000¢)
+        clean_finding = {
+            "raw_ai_text": "Customer was billed $50.00 but recalculated amount is $30.00, yielding a $20.00 discrepancy.",
+            "verified_facts": ["Discrepancy is 2000¢."],
+        }
+        passed, errors = validate_narrative_amounts(clean_finding, line_results, summary)
+        assert passed is True
+        assert len(errors) == 0
+
+        # 2. Fabricated narrative with unanchored dollar amounts ($99.99 or 8888¢) fails
+        hallucinated_finding = {
+            "raw_ai_text": "We recommend a refund of $99.99 based on extra charges of 8888¢.",
+            "verified_facts": ["Customer is owed $75.00."],
+        }
+        passed, errors = validate_narrative_amounts(hallucinated_finding, line_results, summary)
+        assert passed is False
+        assert len(errors) >= 2
+        assert any("$99.99" in e for e in errors)
+
 
 class TestFullLifecycleIntegration:
     def test_investigation_review_and_credit_approval_pipeline(self, client_and_session):

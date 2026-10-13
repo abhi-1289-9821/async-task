@@ -190,21 +190,24 @@ def approve_credit(
         .scalar()
     )
 
-    # Sum of prior account adjustments for this case
-    case_adjustments = (
+    # Prior adjustments for this line (either explicitly linked to this line, or case-wide)
+    line_adjustments = (
         db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
-        .filter(Adjustment.case_id == case_id)
+        .filter(
+            Adjustment.case_id == case_id,
+            (Adjustment.invoice_line_id == invoice_line_id) | (Adjustment.invoice_line_id.is_(None)),
+        )
         .scalar()
     )
 
-    remaining_cap = eligible_overcharge - prior_credits - case_adjustments
+    remaining_cap = eligible_overcharge - prior_credits - line_adjustments
     if remaining_cap <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"Cumulative credit cap reached for line '{invoice_line_id}'. "
                 f"Eligible overcharge: {eligible_overcharge}¢, Prior credits: {prior_credits}¢, "
-                f"Adjustments: {case_adjustments}¢. Remaining cap: {remaining_cap}¢."
+                f"Adjustments: {line_adjustments}¢. Remaining cap: {remaining_cap}¢."
             ),
         )
 

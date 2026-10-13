@@ -684,3 +684,16 @@ class TestCreditApprovalAndConcurrencyCap:
         assert res.status_code == 400
         assert "Invoice line mismatch" in res.json()["detail"]
 
+    def test_path_traversal_blocked_on_spa_route(self, client_and_session):
+        """Security regression test: verify path traversal cannot escape frontend/dist."""
+        client, _ = client_and_session
+        res = client.get("/../../backend/requirements.txt")
+        # Must NEVER return the requirements.txt file contents
+        assert "fastapi" not in res.text
+        assert "uvicorn" not in res.text
+        # Instead returns SPA index.html (200) or 404 Not Found
+        assert res.status_code in (200, 404)
+        if res.status_code == 200:
+            assert "<!doctype html" in res.text.lower() or "<html" in res.text.lower()
+
+

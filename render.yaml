@@ -19,6 +19,6 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: DEMO_REVIEWER_TOKEN
-        generateValue: true
+        sync: false
       - key: DEMO_VIEWER_TOKEN
-        generateValue: true
+        sync: false

@@ -132,4 +132,19 @@ Each entry: Phase, timestamp, category, event, fix, status.
 - **Outcome**: Built production client bundle in 1.35s with 0 errors via `npm run build`.
 - **Status**: resolved
 
+---
+
+## Hardening & Deployment Fixes
+
+### [Phase 4+] [2026-10-13 16:05] — Security hardening, wrong-line bug fix & full-stack mount
+- **Wrong-Line Credit Guard**: Fixed vulnerability where credit could be approved against a different invoice line item than the calculation result. Added invariant check `line_result.line_id == invoice_line_id` in `credit_service.py` with regression test in `tests/test_api_and_services.py`.
+- **Dependency Pin Resolution**: Replaced brittle conflicting pins in `backend/requirements.txt` (`langgraph==1.2.15` vs `langchain-core==0.3.25`) with compatible semantic ranges (`langgraph>=1.2.0,<2.0.0` and `langchain-core>=1.4.7,<2.0.0`), verified via `pip install --dry-run`.
+- **Transaction Exception Handling**: Replaced generic `except (OperationalError, Exception): pass` on SQLite `BEGIN IMMEDIATE;` with specific check for `"cannot start a transaction within a transaction"`, preventing silent masking of real database lock errors.
+- **Production Startup Security**: Added Pydantic `@model_validator` in `config.py` that halts application startup with a fatal `ValueError` if `ENVIRONMENT=production` runs with default guessable demo tokens.
+- **Full-Stack SPA Serving**: Configured `main.py` to automatically detect and serve `frontend/dist` on `/assets` and SPA index routing, enabling unified single-service deployments on Render.
+- **Postgres Concurrency Verification**: Implemented full assertion helper in `test_concurrency.py` for live PostgreSQL `SELECT FOR UPDATE` verification via `POSTGRES_TEST_URL`.
+- **Outcome**: All 86 tests pass (1 skipped for live Postgres). Clean production build and zero dependency conflicts.
+- **Status**: resolved
+
+
 

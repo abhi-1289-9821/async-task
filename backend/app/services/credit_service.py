@@ -86,8 +86,9 @@ def approve_credit(
         # SQLite: serialize transactions via BEGIN IMMEDIATE if not already begun
         try:
             db.execute(text("BEGIN IMMEDIATE;"))
-        except (OperationalError, Exception):
-            pass
+        except OperationalError as e:
+            if "cannot start a transaction within a transaction" not in str(e).lower():
+                raise
 
         case = db.query(Case).filter(Case.id == case_id).one_or_none()
         line = (
@@ -161,6 +162,16 @@ def approve_credit(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"CalculationLineResult '{finding.calculation_line_result_id}' not found",
+        )
+
+    # Invariant: Line in calculation result must match the requested invoice_line_id
+    if line_result.line_id != invoice_line_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Invoice line mismatch: finding calculation result is for line '{line_result.line_id}', "
+                f"but credit was requested for line '{invoice_line_id}'"
+            ),
         )
 
     # Overcharge: difference_cents is negative (recalculated - original)

@@ -2,11 +2,15 @@
 main.py
 =======
 FastAPI application entrypoint for Billing Dispute Investigation and Resolution Agent.
+Serves both REST API endpoints and built React frontend assets.
 """
 
+import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import create_all_tables
@@ -59,11 +63,41 @@ def health_check():
     return {"status": "ok", "version": settings.app_version}
 
 
-@app.get("/", tags=["health"])
-def root():
-    return {
-        "name": "Billing Dispute Resolution API",
-        "version": settings.app_version,
-        "status": "online",
-        "docs": "/docs",
-    }
+# ── Frontend SPA Mounting ─────────────────────────────────────────────────────
+# If the React frontend has been built into frontend/dist, serve it directly
+# so that the service runs as a unified full-stack application.
+FRONTEND_DIST = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
+)
+
+if os.path.isdir(FRONTEND_DIST):
+    assets_dir = os.path.join(FRONTEND_DIST, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def serve_frontend_spa(full_path: str):
+        # Do not intercept API, health probe, or docs paths
+        if (
+            full_path.startswith("api/")
+            or full_path.startswith("healthz")
+            or full_path in ("docs", "redoc", "openapi.json")
+        ):
+            raise HTTPException(status_code=404, detail="Not Found")
+        file_path = os.path.join(FRONTEND_DIST, full_path)
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        index_file = os.path.join(FRONTEND_DIST, "index.html")
+        if os.path.isfile(index_file):
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="Frontend index.html not found")
+else:
+    @app.get("/", tags=["health"])
+    def root():
+        return {
+            "name": "Billing Dispute Resolution API",
+            "version": settings.app_version,
+            "status": "online",
+            "docs": "/docs",
+            "frontend": "Not built; run 'npm run build' in /frontend to bundle UI.",
+        }

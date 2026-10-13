@@ -49,19 +49,8 @@ def isolated_db(tmp_path):
     test_engine.dispose()
 
 
-def test_concurrent_credit_approvals_hold_cumulative_cap(isolated_db):
-    """
-    Spawns 10 parallel threads attempting to claim a $50.00 (5000 cents) overcharge simultaneously.
-    Proves that:
-      - The cumulative cap holds under parallel concurrency.
-      - Total approved credits never exceed 5000 cents.
-      - Exactly one thread claims the credit, and competing threads are rejected.
-    """
-    SessionLocal = isolated_db
-    case_id = "case-conc-1"
-    line_id = "line-conc-1"
-    find_id = "find-conc-1"
-
+def _run_concurrency_cap_assertion(SessionLocal, case_id: str, line_id: str, find_id: str):
+    """Executes 10-thread parallel claim against a 5000¢ overcharge, asserting exact cap hold."""
     # Seed dispute data
     with SessionLocal() as db:
         case = Case(
@@ -79,20 +68,20 @@ def test_concurrent_credit_approvals_hold_cumulative_cap(isolated_db):
             original_amount_cents=5000,
         )
         calc = Calculation(
-            id="calc-conc-1",
+            id=f"calc-{case_id}",
             case_id=case_id,
             evidence_version=1,
             engine_status=EngineStatusDB.OK,
             total_original_billed_cents=5000,
             total_recalculated_cents=0,
             total_difference_cents=-5000,
-            result_hash="hash-conc-1",
+            result_hash=f"hash-{case_id}",
         )
         clr = CalculationLineResult(
-            calculation_id="calc-conc-1",
+            calculation_id=f"calc-{case_id}",
             line_id=line_id,
-            result_id="res_conc_12345678",
-            rule_id="rule-conc-1",
+            result_id=f"res_{case_id[:12]}",
+            rule_id=f"rule-{case_id}",
             original_amount_cents=5000,
             recalculated_amount_cents=0,
             difference_cents=-5000,  # 5000 cents eligible overcharge
@@ -104,11 +93,11 @@ def test_concurrent_credit_approvals_hold_cumulative_cap(isolated_db):
         db.add_all([case, line, calc, clr])
         db.flush()
 
-        run = InvestigationRun(id="run-conc-1", case_id=case_id, evidence_version=1, status="COMPLETED")
+        run = InvestigationRun(id=f"run-{case_id}", case_id=case_id, evidence_version=1, status="COMPLETED")
         finding = Finding(
             id=find_id,
             case_id=case_id,
-            run_id="run-conc-1",
+            run_id=f"run-{case_id}",
             calculation_line_result_id=clr.id,
             finding_type="CONFIRMED_CALCULATION_DISCREPANCY",
             raw_ai_text="Overcharge eligible for credit",
@@ -170,6 +159,22 @@ def test_concurrent_credit_approvals_hold_cumulative_cap(isolated_db):
         assert len(credit_records) == 1
 
 
+def test_concurrent_credit_approvals_hold_cumulative_cap(isolated_db):
+    """
+    Spawns 10 parallel threads attempting to claim a $50.00 (5000 cents) overcharge simultaneously.
+    Proves that:
+      - The cumulative cap holds under parallel concurrency.
+      - Total approved credits never exceed 5000 cents.
+      - Exactly one thread claims the credit, and competing threads are rejected.
+    """
+    _run_concurrency_cap_assertion(
+        SessionLocal=isolated_db,
+        case_id="case-conc-1",
+        line_id="line-conc-1",
+        find_id="find-conc-1",
+    )
+
+
 @pytest.mark.skipif(
     not os.environ.get("POSTGRES_TEST_URL"),
     reason="Requires live PostgreSQL instance via POSTGRES_TEST_URL env var",
@@ -185,6 +190,13 @@ def test_postgres_select_for_update_concurrency():
     Base.metadata.create_all(bind=pg_engine)
     PGSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=pg_engine)
 
-    # Re-run same concurrency check on real PostgreSQL
-    # (Identical test logic as test_concurrent_credit_approvals_hold_cumulative_cap above)
-    pg_engine.dispose()
+    try:
+        _run_concurrency_cap_assertion(
+            SessionLocal=PGSessionLocal,
+            case_id="case-pg-conc-1",
+            line_id="line-pg-conc-1",
+            find_id="find-pg-conc-1",
+        )
+    finally:
+        pg_engine.dispose()
+

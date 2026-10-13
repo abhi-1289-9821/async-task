@@ -221,16 +221,23 @@ pytest -v
   - Append-only trigger verification blocking modifications on `calculation_line_results`.
   - Unique constraint enforcement on `Credit.idempotency_key`.
   - JSON serialization of contract tiers and exemption lists.
-- **FastAPI Backend & Services (14 tests in [`backend/tests/test_api_and_services.py`](backend/tests/test_api_and_services.py)):**
+- **FastAPI Backend & Services (16 tests in [`backend/tests/test_api_and_services.py`](backend/tests/test_api_and_services.py)):**
   - Auth enforcement: Bearer token validation, 401 on missing/invalid token, 403 on viewer mutating actions.
+  - Startup security: Refuses to boot in production when default demo tokens are present.
   - State machine lifecycle transitions and 409 Conflict rejection on invalid paths.
   - Evidence upload bumping version from 1 to 2, marking findings stale, and reopening resolved cases.
   - Finding review workflows: `ACCEPT`, `EDIT` (with separate text), and `REJECT`.
   - End-to-end calculation execution via API with line-item results.
-  - Credit approval: stale finding rejection (400), unreviewed finding rejection (400), idempotency 409 Conflict on repeat, and cumulative cap exhaustion (400).
+  - Credit approval: stale finding rejection (400), unreviewed finding rejection (400), line item mismatch rejection (400), idempotency 409 Conflict on repeat, and cumulative cap exhaustion (400).
+- **LangGraph Agentic Investigation (9 tests in [`backend/tests/test_agent.py`](backend/tests/test_agent.py)):**
+  - Autonomous multi-node graph: gather evidence, deterministic calculation, findings synthesis, resolution formulation.
+  - Injection defense with `<untrusted_customer_dispute>` isolation tags.
+  - Citation validation verifying all cited IDs exist in calculation results.
+  - Consistency check detecting contradictions between deterministic math and LLM narrative.
 - **Concurrency Stress Test (1 test in [`backend/tests/test_concurrency.py`](backend/tests/test_concurrency.py)):**
   - Fires 10 concurrent threads simultaneously against a single overcharge line item.
   - Proves that exactly 1 thread claims the credit, 9 competing threads are rejected, and total approved credits strictly equals the eligible overcharge (zero double-crediting).
+  - PostgreSQL `SELECT FOR UPDATE` verification configured via `POSTGRES_TEST_URL`.
 
 ---
 
@@ -291,8 +298,7 @@ npm run dev
 
 - [x] **Phase 0: Architecture & Risk Evaluation**
 - [x] **Phase 1: Deterministic Engine & Core Schema** (60 passing tests)
-- [x] **Phase 2: FastAPI Backend, Audit Log & State Machine** (75 passing tests, concurrency stress tested)
-- [x] **Phase 3: Agentic Investigation (LangGraph + Gemini)** (84 passing tests, citation & injection defense)
+- [x] **Phase 3: Agentic Investigation (LangGraph + Gemini)** (86 passing tests, citation & injection defense)
 - [x] **Phase 4: Frontend Audit Workspace (React + Vite)** (Dark mode UI, scenario presets, interactive review)
 - [ ] **Phase 5: End-to-End Scenarios & Demonstration Workflows**
 

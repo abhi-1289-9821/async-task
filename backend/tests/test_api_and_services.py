@@ -93,6 +93,16 @@ class TestAuthAndRoles:
         )
         assert res.status_code == 403
 
+    def test_production_environment_refuses_default_tokens(self):
+        """Proves app refuses to boot in production with guessable default demo tokens."""
+        from app.config import Settings
+        with pytest.raises(ValueError, match="Production Security Error"):
+            Settings(
+                environment="production",
+                demo_reviewer_token="demo-reviewer-token-change-me",
+                demo_viewer_token="demo-viewer-token-change-me",
+            )
+
 
 class TestStateMachineTransitions:
     def _create_test_case(self, client, case_id="case-sm-1", initial_status="OPEN"):
@@ -637,3 +647,40 @@ class TestCreditApprovalAndConcurrencyCap:
         )
         assert r2.status_code == 400
         assert "Cumulative credit cap reached" in r2.json()["detail"]
+
+    def test_credit_rejected_when_invoice_line_mismatches_calculation_result(self, client_and_session):
+        """Regression test: prevents credit approval when line_result.line_id != invoice_line_id."""
+        client, SessionLocal = client_and_session
+        line_id, find_id = self._setup_disputed_line_with_finding(
+            client, SessionLocal, "case-cred-wrong-line", diff_cents=-2000
+        )
+
+        # Accept finding
+        client.post(f"/api/findings/{find_id}/review", headers=REVIEWER_HEADERS, json={"action": "ACCEPT"})
+
+        # Add a second invoice line to the same case
+        with SessionLocal() as db:
+            db.add(
+                InvoiceLine(
+                    id="line-other-different",
+                    case_id="case-cred-wrong-line",
+                    description="Different service line",
+                    original_amount_cents=5000,
+                )
+            )
+            db.commit()
+
+        # Attempt to credit line-other-different using finding tied to line_id
+        res = client.post(
+            "/api/credits/approve",
+            headers=REVIEWER_HEADERS,
+            json={
+                "case_id": "case-cred-wrong-line",
+                "invoice_line_id": "line-other-different",
+                "reason_code": "WRONG_LINE_DISCREPANCY",
+                "finding_id": find_id,
+            },
+        )
+        assert res.status_code == 400
+        assert "Invoice line mismatch" in res.json()["detail"]
+

@@ -5,10 +5,14 @@
  * Supports switching between REVIEWER and VIEWER demo roles with Bearer auth.
  */
 
-// Default demo tokens matching backend .env and config
+const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
+
+// Default demo tokens matching local backend .env and config.
+// In deployed environments, override via localStorage ('billing_reviewer_token')
+// or by setting VITE_DEMO_REVIEWER_TOKEN / VITE_DEMO_VIEWER_TOKEN at build time.
 export const DEMO_TOKENS = {
-  REVIEWER: 'demo-reviewer-token-change-me',
-  VIEWER: 'demo-viewer-token-change-me',
+  REVIEWER: import.meta.env?.VITE_DEMO_REVIEWER_TOKEN || localStorage.getItem('billing_reviewer_token') || 'demo-reviewer-token-change-me',
+  VIEWER: import.meta.env?.VITE_DEMO_VIEWER_TOKEN || localStorage.getItem('billing_viewer_token') || 'demo-viewer-token-change-me',
 };
 
 let currentRole = 'REVIEWER';
@@ -21,6 +25,16 @@ export function setActiveRole(role) {
   if (role === 'REVIEWER' || role === 'VIEWER') {
     currentRole = role;
     localStorage.setItem('billing_demo_role', role);
+  }
+}
+
+export function setCustomToken(role, token) {
+  if (role === 'REVIEWER') {
+    localStorage.setItem('billing_reviewer_token', token);
+    DEMO_TOKENS.REVIEWER = token;
+  } else if (role === 'VIEWER') {
+    localStorage.setItem('billing_viewer_token', token);
+    DEMO_TOKENS.VIEWER = token;
   }
 }
 
@@ -38,7 +52,8 @@ async function request(endpoint, options = {}) {
     ...options.headers,
   };
 
-  const response = await fetch(endpoint, {
+  const url = `${API_BASE}${endpoint}`;
+  const response = await fetch(url, {
     ...options,
     headers,
   });

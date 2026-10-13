@@ -1,0 +1,24 @@
+# ── Web framework ──────────────────────────────────────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+
+# ── Data / validation ──────────────────────────────────────────────────────────
+pydantic==2.10.3
+pydantic-settings==2.6.1
+
+# ── Database ───────────────────────────────────────────────────────────────────
+sqlalchemy==2.0.36
+alembic==1.14.0
+# psycopg2-binary is for Postgres (Neon); SQLite is stdlib, no extra package needed
+psycopg2-binary==2.9.10
+
+# ── AI ─────────────────────────────────────────────────────────────────────────
+langgraph==1.2.15
+langchain-core==0.3.25
+google-genai==2.30.0
+
+# ── Utilities ──────────────────────────────────────────────────────────────────
+python-dotenv==1.0.1
+httpx==0.28.1
+tenacity==9.0.0

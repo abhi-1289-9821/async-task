@@ -96,4 +96,25 @@ Each entry: Phase, timestamp, category, event, fix, status.
 - **Outcome**: Verified that exactly 1 thread succeeded with 201 Created, while the competing 9 threads were rejected via cap exhaustion or 409 idempotency key collision. Total credited amount in database strictly equaled the eligible overcharge (zero double-crediting).
 - **Status**: resolved
 
+---
+
+## Phase 3
+
+### [Phase 3] [2026-10-13 14:18] — Gemini SDK & model discovery
+- **Event**: Live call to `gemini-2.5-flash` returned 404 from Google API ("model is no longer available to new users, update code to gemini-3.8-flash"). High demand returned 503 UNAVAILABLE on alternative preview endpoints.
+- **Architecture Validation**: Implemented dual-mode LLM layer: `LLM_MODE=mock` for deterministic offline testing and CI/CD without network flakiness; `LLM_MODE=real` with bounded retries (max 2) and graceful fallback. In production, LLM transient failures yield `PARTIAL` status while preserving the deterministic calculation results.
+- **Status**: resolved
+
+### [Phase 3] [2026-10-13 14:21] — LangGraph StateGraph & prompt injection defense
+- **Event**: Implemented `InvestigationWorkflow` with nodes: `gather_evidence`, `run_calculation`, `analyze_findings`, `formulate_options`, `validate_and_sanitize`, `persist_results`.
+- **Security Invariant**: Isolated untrusted customer dispute statements inside `<untrusted_customer_dispute>` delimiters. System instructions and state machine enforce that user prompts can never override system instructions or fabricate credit amounts.
+- **Deterministic Gates**: Missing invoice lines or contract rules abort directly to `RunStatus.BLOCKED` before generating findings. Credit options are strictly anchored to `calculation_line_result_id` from the deterministic engine.
+- **Status**: resolved
+
+### [Phase 3] [2026-10-13 14:26] — Citation and consistency validation
+- **Event**: Implemented validators in `app.agent.validator`: `validate_citations` catches hallucinated or cross-case citation IDs; `validate_consistency` catches mathematical contradictions between finding claims and calculation results; `sanitize_resolution_options` rejects credit recommendations on non-overcharged lines.
+- **Test Suite**: Added 9 tests in `tests/test_agent.py` covering evidence gates, overcharge discrepancy, contract ambiguity, clean calculation, prompt injection safety, validators, and full pipeline (investigation -> human accept review -> credit approval).
+- **Outcome**: All 84 tests pass (1 skipped for PostgreSQL in CI).
+- **Status**: resolved
+
 

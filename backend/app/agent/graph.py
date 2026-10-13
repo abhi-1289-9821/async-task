@@ -1,0 +1,375 @@
+"""
+agent/graph.py
+==============
+LangGraph StateGraph implementation for autonomous billing dispute investigations.
+Enforces deterministic gates:
+- Missing evidence blocks execution before finding creation (status = BLOCKED).
+- Mathematical calculations are strictly delegated to the deterministic billing engine.
+- Citations and amounts are strictly verified against calculation line results.
+"""
+
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+from langgraph.graph import END, START, StateGraph
+from sqlalchemy.orm import Session
+
+from app.agent import llm_client, validator
+from app.agent.state import AgentState
+from app.models.case import Case, CaseEvent
+from app.models.invoice import ContractRule, InvoiceLine
+from app.models.usage import UsageEvent
+from app.models.credit import Adjustment
+from app.models.investigation import (
+    AgentFindingType,
+    Finding,
+    InvestigationRun,
+    OptionType,
+    ResolutionOption,
+    RunStatus,
+)
+from app.services.calculation_service import execute_case_calculation
+
+
+class InvestigationWorkflow:
+    """Manages compilation and execution of the investigation StateGraph."""
+
+    def __init__(self, db: Session):
+        self.db = db
+        self.graph = self._build_graph()
+
+    def _build_graph(self):
+        builder = StateGraph(AgentState)
+
+        # Nodes
+        builder.add_node("gather_evidence", self.gather_evidence_node)
+        builder.add_node("run_calculation", self.run_calculation_node)
+        builder.add_node("analyze_findings", self.analyze_findings_node)
+        builder.add_node("formulate_options", self.formulate_options_node)
+        builder.add_node("validate_and_sanitize", self.validate_and_sanitize_node)
+        builder.add_node("persist_results", self.persist_results_node)
+
+        # Edges
+        builder.add_edge(START, "gather_evidence")
+
+        # Conditional route from gather_evidence:
+        builder.add_conditional_edges(
+            "gather_evidence",
+            self.route_after_evidence,
+            {
+                "blocked": "persist_results",
+                "continue": "run_calculation",
+            },
+        )
+
+        builder.add_edge("run_calculation", "analyze_findings")
+        builder.add_edge("analyze_findings", "formulate_options")
+        builder.add_edge("formulate_options", "validate_and_sanitize")
+        builder.add_edge("validate_and_sanitize", "persist_results")
+        builder.add_edge("persist_results", END)
+
+        return builder.compile()
+
+    # ── Routing ───────────────────────────────────────────────────────────────
+    @staticmethod
+    def route_after_evidence(state: AgentState) -> str:
+        if state.get("status") == "BLOCKED":
+            return "blocked"
+        return "continue"
+
+    # ── Nodes ─────────────────────────────────────────────────────────────────
+    def gather_evidence_node(self, state: AgentState) -> dict[str, Any]:
+        """Loads all evidence from DB. If required data is missing, marks BLOCKED."""
+        case_id = state["case_id"]
+        case = self.db.query(Case).filter(Case.id == case_id).one_or_none()
+        if not case:
+            return {
+                "status": "FAILED",
+                "status_reason": f"Case '{case_id}' not found",
+            }
+
+        lines = self.db.query(InvoiceLine).filter(InvoiceLine.case_id == case_id).all()
+        rules = self.db.query(ContractRule).filter(ContractRule.case_id == case_id).all()
+        events = self.db.query(UsageEvent).filter(UsageEvent.case_id == case_id).all()
+        adjustments = self.db.query(Adjustment).filter(Adjustment.case_id == case_id).all()
+
+        # Gate: If no invoice lines or no contract rules, cannot calculate
+        if not lines or not rules:
+            return {
+                "status": "BLOCKED",
+                "status_reason": "MISSING_EVIDENCE: Case requires both invoice lines and contract rules to investigate",
+                "evidence_version": case.evidence_version,
+                "case_data": {
+                    "id": case.id,
+                    "title": case.title,
+                    "customer_name": case.customer_name,
+                    "disputed_amount_cents": case.disputed_amount_cents,
+                },
+                "dispute_text": case.title,
+                "invoice_lines": [],
+                "contract_rules": [],
+                "usage_events": [],
+                "adjustments": [],
+            }
+
+        return {
+            "status": "RUNNING",
+            "evidence_version": case.evidence_version,
+            "case_data": {
+                "id": case.id,
+                "title": case.title,
+                "customer_name": case.customer_name,
+                "disputed_amount_cents": case.disputed_amount_cents,
+            },
+            "dispute_text": f"{case.title}. Customer: {case.customer_name}.",
+            "invoice_lines": [
+                {"id": l.id, "description": l.description, "original_amount_cents": l.original_amount_cents}
+                for l in lines
+            ],
+            "contract_rules": [
+                {
+                    "id": r.id,
+                    "line_id": r.line_id,
+                    "rule_type": r.rule_type.value,
+                    "rate_cents": r.rate_cents,
+                    "minimum_commit_cents": r.minimum_commit_cents,
+                    "exempt_environments": r.exempt_environments,
+                }
+                for r in rules
+            ],
+            "usage_events": [
+                {"id": e.id, "line_id": e.line_id, "quantity": float(e.quantity), "environment": e.environment}
+                for e in events
+            ],
+            "adjustments": [
+                {"id": a.id, "amount_cents": a.amount_cents, "reason_code": a.reason_code}
+                for a in adjustments
+            ],
+        }
+
+    def run_calculation_node(self, state: AgentState) -> dict[str, Any]:
+        """Invokes the deterministic calculation engine."""
+        calc = execute_case_calculation(
+            db=self.db,
+            case_id=state["case_id"],
+            actor=state["actor"],
+            correlation_id=state.get("correlation_id"),
+        )
+
+        line_results = []
+        valid_result_ids = []
+        for lr in calc.line_results:
+            line_results.append({
+                "id": lr.id,
+                "line_id": lr.line_id,
+                "result_id": lr.result_id,
+                "original_amount_cents": lr.original_amount_cents,
+                "recalculated_amount_cents": lr.recalculated_amount_cents,
+                "difference_cents": lr.difference_cents,
+                "finding_type": lr.finding_type.value,
+                "explanation": lr.explanation,
+            })
+            valid_result_ids.append(lr.result_id)
+
+        return {
+            "calculation_id": calc.id,
+            "calculation_status": calc.engine_status.value,
+            "calculation_status_reason": calc.engine_status_reason,
+            "total_original_billed_cents": calc.total_original_billed_cents,
+            "total_recalculated_cents": calc.total_recalculated_cents,
+            "total_difference_cents": calc.total_difference_cents,
+            "result_hash": calc.result_hash,
+            "line_results": line_results,
+            "valid_result_ids": valid_result_ids,
+        }
+
+    def analyze_findings_node(self, state: AgentState) -> dict[str, Any]:
+        """Calls LLM Call 1 to produce structured investigation findings."""
+        finding_dict, tokens = llm_client.generate_investigation_findings(state)
+        token_usage = state.get("token_usage", {})
+        for k, v in tokens.items():
+            token_usage[k] = token_usage.get(k, 0) + v
+
+        return {
+            "raw_findings": [finding_dict],
+            "token_usage": token_usage,
+        }
+
+    def formulate_options_node(self, state: AgentState) -> dict[str, Any]:
+        """Calls LLM Call 2 to formulate resolution options."""
+        raw_findings = state.get("raw_findings", [])
+        primary_finding = raw_findings[0] if raw_findings else {}
+        options_list, tokens = llm_client.generate_resolution_options(state, primary_finding)
+
+        token_usage = state.get("token_usage", {})
+        for k, v in tokens.items():
+            token_usage[k] = token_usage.get(k, 0) + v
+
+        return {
+            "raw_options": options_list,
+            "token_usage": token_usage,
+        }
+
+    def validate_and_sanitize_node(self, state: AgentState) -> dict[str, Any]:
+        """Applies citation validation, consistency checks, and option sanitization."""
+        raw_findings = state.get("raw_findings", [])
+        valid_result_ids = state.get("valid_result_ids", [])
+        calc_status = state.get("calculation_status", "OK")
+        total_diff = state.get("total_difference_cents", 0)
+        line_results = state.get("line_results", [])
+
+        validated_findings = []
+        for rf in raw_findings:
+            # 1. Validate citations
+            citation_passed, sanitized_citations, c_errs = validator.validate_citations(
+                rf, valid_result_ids
+            )
+            # 2. Consistency check
+            consist_passed, final_finding_type, con_errs = validator.validate_consistency(
+                rf, calc_status, total_diff, line_results
+            )
+
+            f_copy = dict(rf)
+            f_copy["citation_ids"] = sanitized_citations
+            f_copy["citation_validation_passed"] = citation_passed
+            f_copy["consistency_check_passed"] = consist_passed
+            f_copy["finding_type"] = final_finding_type
+            validated_findings.append(f_copy)
+
+        # 3. Sanitize resolution options
+        raw_options = state.get("raw_options", [])
+        validated_options = validator.sanitize_resolution_options(raw_options, line_results)
+
+        return {
+            "validated_findings": validated_findings,
+            "validated_options": validated_options,
+            "status": "COMPLETED",
+        }
+
+    def persist_results_node(self, state: AgentState) -> dict[str, Any]:
+        """Persists the InvestigationRun, Findings, and ResolutionOptions to DB."""
+        run_id = state["run_id"]
+        status_val = state.get("status", "COMPLETED")
+
+        # 1. InvestigationRun record
+        db_run = InvestigationRun(
+            id=run_id,
+            case_id=state["case_id"],
+            calculation_id=state.get("calculation_id"),
+            evidence_version=state.get("evidence_version", 1),
+            status=RunStatus(status_val),
+            status_reason=state.get("status_reason"),
+            token_usage=state.get("token_usage"),
+            completed_at=datetime.now(timezone.utc),
+        )
+        self.db.add(db_run)
+
+        # If BLOCKED, do NOT create findings
+        if status_val == "BLOCKED":
+            audit_event = CaseEvent(
+                case_id=state["case_id"],
+                event_type="INVESTIGATION_RUN_BLOCKED",
+                actor=state["actor"],
+                details={
+                    "run_id": run_id,
+                    "reason": state.get("status_reason"),
+                    "evidence_version": state.get("evidence_version"),
+                },
+                correlation_id=state.get("correlation_id"),
+            )
+            self.db.add(audit_event)
+            self.db.commit()
+            return {"status": "BLOCKED"}
+
+        # 2. Persist Findings
+        db_findings = []
+        for vf in state.get("validated_findings", []):
+            f_id = f"fnd_{uuid.uuid4().hex[:12]}"
+            db_finding = Finding(
+                id=f_id,
+                run_id=run_id,
+                case_id=state["case_id"],
+                finding_type=AgentFindingType(vf.get("finding_type", "UNRESOLVED")),
+                raw_ai_text=vf.get("summary_narrative"),
+                calculation_line_result_id=vf.get("calculation_line_result_id"),
+                verified_facts=vf.get("verified_facts"),
+                possible_explanations=vf.get("possible_explanations"),
+                assumptions=vf.get("assumptions"),
+                open_questions=vf.get("open_questions"),
+                missing_evidence_questions=vf.get("missing_evidence_questions"),
+                citation_ids=vf.get("citation_ids"),
+                citation_validation_passed=vf.get("citation_validation_passed", False),
+                consistency_check_passed=vf.get("consistency_check_passed", False),
+                is_stale=False,
+            )
+            self.db.add(db_finding)
+            db_findings.append(db_finding)
+
+        # 3. Persist ResolutionOptions
+        db_options = []
+        for vo in state.get("validated_options", []):
+            o_id = f"opt_{uuid.uuid4().hex[:12]}"
+            db_opt = ResolutionOption(
+                id=o_id,
+                run_id=run_id,
+                case_id=state["case_id"],
+                option_type=OptionType(vo["option_type"]),
+                description=vo.get("description", ""),
+                calculation_line_result_id=vo.get("calculation_line_result_id"),
+                is_stale=False,
+            )
+            self.db.add(db_opt)
+            db_options.append(db_opt)
+
+        # 4. Append-only audit log
+        audit_event = CaseEvent(
+            case_id=state["case_id"],
+            event_type="INVESTIGATION_RUN_COMPLETED",
+            actor=state["actor"],
+            details={
+                "run_id": run_id,
+                "calculation_id": state.get("calculation_id"),
+                "status": status_val,
+                "findings_count": len(db_findings),
+                "options_count": len(db_options),
+                "evidence_version": state.get("evidence_version"),
+            },
+            correlation_id=state.get("correlation_id"),
+        )
+        self.db.add(audit_event)
+
+        self.db.commit()
+        return {"status": "COMPLETED"}
+
+
+def run_investigation(
+    db: Session,
+    case_id: str,
+    actor: str,
+    correlation_id: Optional[str] = None,
+) -> InvestigationRun:
+    """Entrypoint function to instantiate the workflow and execute the LangGraph StateGraph."""
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+
+    case = db.query(Case).filter(Case.id == case_id).one_or_none()
+    evidence_version = case.evidence_version if case else 1
+
+    initial_state: AgentState = {
+        "case_id": case_id,
+        "run_id": run_id,
+        "actor": actor,
+        "correlation_id": correlation_id,
+        "evidence_version": evidence_version,
+        "status": "RUNNING",
+        "token_usage": {},
+        "errors": [],
+        "warnings": [],
+    }
+
+    workflow = InvestigationWorkflow(db)
+    workflow.graph.invoke(initial_state)
+
+    # Return refreshed InvestigationRun
+    db_run = db.query(InvestigationRun).filter(InvestigationRun.id == run_id).one()
+    return db_run

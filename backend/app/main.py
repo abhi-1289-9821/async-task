@@ -16,6 +16,7 @@ from app.routers import (
     calculations_router,
     findings_router,
     credits_router,
+    investigations_router,
 )
 
 
@@ -49,6 +50,7 @@ app.include_router(evidence_router)
 app.include_router(calculations_router)
 app.include_router(findings_router)
 app.include_router(credits_router)
+app.include_router(investigations_router)
 
 
 @app.get("/healthz", tags=["health"])

@@ -44,6 +44,26 @@ def approve_mock_credit(
     )
 
 
+@router.post("/case/{case_id}", response_model=CreditResponse, status_code=status.HTTP_201_CREATED)
+def approve_case_credit(
+    case_id: str,
+    payload: CreditApproveRequest,
+    user: Annotated[AuthUser, Depends(require_reviewer)],
+    db: Session = Depends(get_db),
+):
+    """Alias for POST /api/credits/approve with case_id in URL."""
+    return approve_credit(
+        db=db,
+        case_id=case_id,
+        invoice_line_id=payload.invoice_line_id,
+        reason_code=payload.reason_code,
+        finding_id=payload.finding_id,
+        actor=user.identity,
+        resolution_option_id=payload.resolution_option_id,
+        reason_note=payload.reason_note,
+    )
+
+
 @router.get("/case/{case_id}", response_model=list[CreditResponse])
 def list_case_credits(
     case_id: str,

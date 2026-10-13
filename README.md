@@ -2,66 +2,39 @@
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
-[![Tests](https://img.shields.io/badge/pytest-60%2F60%20passed-brightgreen.svg)]()
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-An enterprise-grade, interview-ready full-stack AI system designed to autonomously investigate, recalculate, and resolve complex SaaS and cloud infrastructure billing disputes. Built with an uncompromising focus on **financial determinism**, **immutable audit trails**, **human-in-the-loop review**, and **concurrency safety**.
+A full-stack AI-assisted application designed to investigate, recalculate, and resolve SaaS and cloud billing disputes. The system pairs a deterministic pricing engine for financial math with an agentic investigation workflow, human-in-the-loop review, and immutable audit logging.
 
 ---
 
 ## 📑 Table of Contents
 
-- [The Problem & Architectural Motivation](#-the-problem--architectural-motivation)
-- [How This Project Differs From Typical Submissions](#-how-this-project-differs-from-typical-submissions)
+- [The Problem & Approach](#-the-problem--approach)
 - [System Architecture](#-system-architecture)
-- [Core Engineering Pillars](#-core-engineering-pillars)
+- [Implemented Features (Phase 1 Tested)](#-implemented-features-phase-1-tested)
   - [1. Pure Deterministic Billing Engine](#1-pure-deterministic-billing-engine)
-  - [2. Database-Enforced Append-Only Audit Trail](#2-database-enforced-append-only-audit-trail)
-  - [3. Human-in-the-Loop Review Architecture](#3-human-in-the-loop-review-architecture)
-  - [4. Concurrency-Safe, Idempotent Credit Approval](#4-concurrency-safe-idempotent-credit-approval)
-  - [5. Staleness & Versioned Evidence Tracking](#5-staleness--versioned-evidence-tracking)
-- [Database Schema (14 Tables)](#-database-schema-14-tables)
-- [Test Suite & Quality Verification](#-test-suite--quality-verification)
-- [Quickstart & Local Development](#-quickstart--local-development)
-- [Implementation Roadmap](#-implementation-roadmap)
-- [Interview Defense & Architecture Q&A](#-interview-defense--architecture-qa)
-- [Engineering Log & Transparency](#-engineering-log--transparency)
+  - [2. Database Models & Schema](#2-database-models--schema)
+  - [3. SQLite Append-Only Triggers](#3-sqlite-append-only-triggers)
+- [Planned Features (Phase 2 & Phase 3)](#-planned-features-phase-2--phase-3)
+- [Excluded Scope](#-excluded-scope)
+- [Known Limitations](#-known-limitations)
+- [API Routes (Pending Phase 2)](#-api-routes-pending-phase-2)
+- [Deployment (Pending Phase 2)](#-deployment-pending-phase-2)
+- [Test Suite & Verification](#-test-suite--verification)
+- [Quickstart & Local Setup](#-quickstart--local-setup)
+- [Documentation & Engineering Logs](#-documentation--engineering-logs)
 
 ---
 
-## 🎯 The Problem & Architectural Motivation
+## 🎯 The Problem & Approach
 
-In modern cloud and enterprise SaaS billing (AWS, Snowflake, Twilio, Datadog), billing disputes are ubiquitous, high-stakes, and computationally intricate. A single monthly bill may involve:
-- Thousands of metered usage events across multiple environments (production, staging, dev).
-- Non-linear pricing structures: graduated marginal tiers, volume retroactive slabs, minimum spend commitments, and contractual percentage discounts.
-- Edge conditions: exempt staging environments, malformed or negative usage metrics, and ambiguous contractual clauses.
+In SaaS and metered cloud infrastructure billing, disputes regularly occur when customers identify discrepancies in multi-tier usage, minimum commitments, or environment-specific charges.
 
-### Why Naive "GenAI-Only" Approaches Fail
-Most LLM-based billing tools fail in enterprise audits because:
-1. **Arithmetic Hallucinations:** LLMs cannot reliably perform multi-tier mathematical calculations or financial rounding.
-2. **Lack of Idempotency:** Running the same dispute twice produces different explanations and conflicting financial recommendations.
-3. **Audit Liability:** If an AI model hallucinatingly credits $10,000, there is no verifiable mathematical proof or deterministic citation anchor.
-4. **Race Conditions:** Naive credit issuance APIs double-credit customers under concurrent web requests.
-
-### The Solution: Hybrid Determinism + Agentic Orchestration
-This system separates **calculation** from **investigation**:
-- **Math is 100% Deterministic:** Executed in pure Python using `Decimal`, integer cents, and strict `ROUND_HALF_UP` rounding. The LLM is **never** permitted to calculate numbers or formulate financial amounts.
-- **AI is 100% Citational:** LangGraph multi-node agents synthesize narrative explanations and draft correspondence, strictly constrained to cite deterministic calculation anchors (`result_id`).
-- **Humans Gate Financial Action:** Credits require explicit reviewer authorization on accepted, non-stale findings.
-
----
-
-## ⚔️ How This Project Differs From Typical Submissions
-
-| Dimension | Typical / Toy Project | This Engineering Solution |
-| :--- | :--- | :--- |
-| **Financial Arithmetic** | Floating-point numbers (`float`), prone to IEEE 754 precision drift. | **Integer Cents & Decimal**: Zero floating-point representation. Pure `ROUND_HALF_UP` boundary math. |
-| **Pricing Models** | Simple flat unit rates (`qty * rate`). | **Comprehensive Real-World Models**: Flat, Per-Unit, Tiered Graduated (marginal), Tiered Volume (retroactive slab), Included Units + Overage, Percentage Discounts, and Minimum Spend Commitments. |
-| **Ambiguity & Quarantine** | Crashes on bad data or silently drops rows. | **Defensive Error Handling**: Quarantines malformed/negative usage without aborting calculation (`PARTIAL`). Generates dual mathematical interpretations when contract terms are underspecified (`AMBIGUOUS`). |
-| **Audit Log Integrity** | Application-level logger or standard SQL table that can be overwritten. | **Physical DB Triggers**: Append-only invariant enforced at the database level (`RAISE(ABORT)` in SQLite, trigger functions in PostgreSQL). `UPDATE` and `DELETE` queries are physically blocked. |
-| **AI Decision Boundary** | LLM outputs credit amount and auto-refunds. | **Rigid Boundary Separation**: LLM amount comes exclusively from engine lookup. Raw AI output is preserved while human edits are captured separately in `FindingReview`. |
-| **Double-Crediting Safety** | Vulnerable to race conditions under concurrent clicks. | **Database Row Locking**: Atomic evaluation using `SELECT FOR UPDATE` (PostgreSQL) / `BEGIN IMMEDIATE` (SQLite) + SHA-256 idempotency keys + cumulative credit cap enforcement. |
-| **Code Integrity** | Unpinned dependencies, hidden AI errors. | **Audited Engineering Log**: Pinned Python 3.12 dependencies, explicit root-cause analysis in `docs/agent_log.md`, zero warnings across 60 unit tests. |
+### Why Separate Calculation From Generative AI?
+LLMs are probabilistic models prone to numerical errors and rounding inconsistencies when evaluating pricing tiers or calculating discounts. This architecture enforces a clear boundary:
+- **Financial Calculation (Deterministic Engine):** Executed purely in Python using `Decimal`, integer cents, and explicit `ROUND_HALF_UP` rounding. The LLM does not calculate billing figures.
+- **Investigation & Narration (Planned - Phase 3):** An agentic workflow synthesizes narrative findings and drafts correspondence, citing cryptographic calculation result anchors (`result_id`).
+- **Human Governance:** Financial credit issuance requires human reviewer approval.
 
 ---
 
@@ -70,168 +43,160 @@ This system separates **calculation** from **investigation**:
 ```
                                   ┌─────────────────────────────────────────┐
                                   │           FastAPI Web Service           │
-                                  │    (Bearer Auth, Role Enforcement)      │
+                                  │           (Pending - Phase 2)           │
                                   └────────────────────┬────────────────────┘
                                                        │
          ┌─────────────────────────────────────────────┼─────────────────────────────────────────────┐
          ▼                                             ▼                                             ▼
 ┌─────────────────────────────────┐       ┌─────────────────────────────────┐       ┌─────────────────────────────────┐
 │     Deterministic Engine        │       │      Agentic Investigation      │       │     Credit Approval Service     │
-│  - Zero float arithmetic        │       │  - LangGraph state orchestrator │       │  - Row-level lock concurrency   │
-│  - Graduated vs Volume tiers    │       │  - Google Gemini API            │       │  - Cumulative credit cap check  │
-│  - Included units & overage     │       │  - Deterministic citation check │       │  - SHA-256 idempotency key      │
-│  - Malformed usage quarantine   │       │  - Human review audit table     │       │  - Atomic balance reduction     │
-│  - Deterministic result hash    │       │  - Preserves raw vs edited text │       │  - Block duplicate requests     │
+│       [IMPLEMENTED]             │       │      (Planned - Phase 3)        │       │       (Planned - Phase 2)       │
+│  - Integer cents arithmetic     │       │  - LangGraph state graph        │       │  - Row-level lock concurrency   │
+│  - Graduated vs Volume tiers    │       │  - Gemini API integration       │       │  - Cumulative credit cap check  │
+│  - Included units & overage     │       │  - Result ID citation check     │       │  - SHA-256 idempotency key      │
+│  - Malformed usage quarantine   │       │  - Finding reviews table        │       │  - 409 conflict handling        │
+│  - SHA-256 result anchors       │       │  - Preserves raw vs edited text │       │  - Requires accepted finding    │
 └────────────────┬────────────────┘       └────────────────┬────────────────┘       └────────────────┬────────────────┘
                  │                                         │                                         │
                  └─────────────────────────────────────────┼─────────────────────────────────────────┘
                                                            ▼
                                   ┌─────────────────────────────────────────┐
                                   │          Relational Storage             │
-                                  │      (SQLite WAL / PostgreSQL)          │
-                                  │   - 14 Normalized Tables                │
-                                  │   - PRAGMA foreign_keys = ON            │
-                                  │   - Append-Only DB Triggers             │
+                                  │  - 14 SQLAlchemy ORM Tables [DONE]      │
+                                  │  - SQLite foreign keys & WAL mode [DONE]│
+                                  │  - SQLite append-only triggers [DONE]   │
+                                  │  - PostgreSQL migrations (Phase 2)      │
                                   └─────────────────────────────────────────┘
 ```
 
 ---
 
-## 🔧 Core Engineering Pillars
+## ✅ Implemented Features (Phase 1 Tested)
+
+All items below are implemented in code and covered by passing unit tests:
 
 ### 1. Pure Deterministic Billing Engine
-Implemented in [`backend/app/billing_engine.py`](file:///d:/agg/backend/app/billing_engine.py):
-- **Zero Floating-Point Drift:** Uses Python's standard `Decimal` class. Intermediate calculations are performed in high precision and rounded to integer cents via `ROUND_HALF_UP`.
-- **Supported Pricing Structures:**
-  - `FLAT`: Fixed charge independent of usage.
-  - `PER_UNIT`: Single unit price applied across aggregated billable quantity.
-  - `TIERED_GRADUATED`: Marginal tiering where usage spans multiple pricing brackets (e.g., units 1–100 @ $10, 101–500 @ $8).
-  - `TIERED_VOLUME`: Retroactive slab tiering where total volume determines the unit price for *all* units, with upper boundaries evaluated inclusively.
-  - `INCLUDED_UNITS`: Free tier allowance with dedicated overage unit rates.
-  - `DISCOUNT_PCT`: Percentage discount applied after tier evaluation.
-  - `MINIMUM_COMMIT`: Enforces minimum contract spend floor after discounts.
+Implemented in [`backend/app/billing_engine.py`](backend/app/billing_engine.py):
+- **Integer Cents Representation:** Stores all prices, billing quantities, and totals as integer cents ($10.00 = 1000$ cents) to prevent floating-point representation drift.
+- **Boundary Rounding:** Uses Python's standard `Decimal` type with `ROUND_HALF_UP` applied once at the final line-item calculation boundary.
+- **Supported Pricing Rules:**
+  - `FLAT`: Fixed fee independent of event count.
+  - `PER_UNIT`: Standard linear unit pricing.
+  - `TIERED_GRADUATED`: Marginal tiering where usage spans multiple pricing brackets.
+  - `TIERED_VOLUME`: Retroactive slab tiering where total volume determines the unit price for all units, with inclusive upper bounds.
+  - `INCLUDED_UNITS`: Included allowance with dedicated overage rates.
+  - `DISCOUNT_PCT`: Percentage discounts applied after base pricing.
+  - `MINIMUM_COMMIT`: Spend floor enforcement evaluated after discounts.
 - **Defensive Data Handling:**
-  - **Quarantine:** Negative usage records are isolated and logged with specific reasons, allowing the remainder of the invoice to compute under `PARTIAL` status.
-  - **Ambiguity Detection:** Underspecified contracts (e.g., tier type not stated) trigger deterministic branching, generating multiple concrete financial interpretations under `AMBIGUOUS` status.
-  - **Repeatable Citation Anchors:** Emits an immutable `result_id` (format: `res_` + 16-hex SHA-256 hash of normalized inputs) for every line item, allowing the AI agent to cite exact calculations.
+  - **Quarantine:** Identifies negative usage values and isolates them into quarantined records without aborting the engine run; returns status `PARTIAL`.
+  - **Ambiguity Branching:** When a tiered rule does not declare whether it is graduated or volume, the engine generates both concrete financial interpretations and sets status to `AMBIGUOUS`.
+  - **Missing Rules:** Unmapped invoice lines return status `INSUFFICIENT_DATA`.
+  - **Deterministic Result Anchors:** Emits an immutable `result_id` (`res_` + SHA-256 slice of normalized inputs) and overall `result_hash` for repeatability.
 
-### 2. Database-Enforced Append-Only Audit Trail
-Implemented in [`backend/app/database.py`](file:///d:/agg/backend/app/database.py):
-- Critical tables (`case_events` and `calculation_line_results`) are physically immutable.
-- Rather than relying on application code conventions, immutability is enforced via database triggers:
-  ```sql
-  CREATE TRIGGER trg_case_events_no_update
-  BEFORE UPDATE ON case_events
-  BEGIN
-      SELECT RAISE(ABORT, 'case_events is append-only: UPDATE is not permitted');
-  END;
+### 2. Database Models & Schema
+Implemented in [`backend/app/models/`](backend/app/models/):
+- 14 SQLAlchemy ORM models across [`case.py`](backend/app/models/case.py), [`invoice.py`](backend/app/models/invoice.py), [`usage.py`](backend/app/models/usage.py), [`calculation.py`](backend/app/models/calculation.py), [`investigation.py`](backend/app/models/investigation.py), and [`credit.py`](backend/app/models/credit.py).
+- Foreign key constraints, lookup indexes, and JSON column mappings for tiered structures and environment exemption lists.
+- `FindingReview` schema designed to store original AI text alongside separate reviewer modifications, notes, and approval status (`ACCEPT`, `EDIT`, `REJECT`).
+- `Credit` schema with a `UNIQUE` constraint on `idempotency_key`.
 
-  CREATE TRIGGER trg_case_events_no_delete
-  BEFORE DELETE ON case_events
-  BEGIN
-      SELECT RAISE(ABORT, 'case_events is append-only: DELETE is not permitted');
-  END;
-  ```
-- Any rogue `UPDATE` or `DELETE` query (from bugs, scripts, or malicious actors) triggers an `IntegrityError` at the database engine level.
-
-### 3. Human-in-the-Loop Review Architecture
-Implemented in [`backend/app/models/investigation.py`](file:///d:/agg/backend/app/models/investigation.py):
-- AI outputs are never treated as authoritative business decisions.
-- Findings generated by the investigation agent must pass through the `finding_reviews` table.
-- Original AI generated text is **permanently preserved**; reviewer adjustments, notes, and final text are recorded separately along with the reviewer's identity and timestamp.
-- Available review states: `ACCEPT`, `EDIT`, `REJECT`. Credit approval strictly requires an `ACCEPTED` non-stale finding.
-
-### 4. Concurrency-Safe, Idempotent Credit Approval
-Implemented in [`backend/app/models/credit.py`](file:///d:/agg/backend/app/models/credit.py):
-- **Deterministic Idempotency Key:** `SHA-256(case_id + invoice_line_id + reason_code)` with a unique constraint in the database.
-- **Race Condition Prevention:**
-  - PostgreSQL: Acquires an exclusive row-level lock via `SELECT FOR UPDATE` on the invoice line.
-  - SQLite: Executes inside a `BEGIN IMMEDIATE` transaction.
-- **Cumulative Cap Invariant:** Verifies that:
-  $$\text{Requested Credit} \le \text{Eligible Overcharge} - \sum \text{Prior Credits} - \sum \text{Contract Adjustments}$$
-  Under concurrent execution, duplicate requests return HTTP `409 Conflict`.
-
-### 5. Staleness & Versioned Evidence Tracking
-- Any upload of new evidence (new usage CSV, updated contract rule) increments `evidence_version` on the case.
-- Any finding, calculation, or resolution option linked to an earlier version is flagged as `is_stale = True`.
-- Credit approvals automatically reject stale findings, prompting the user or agent to re-run investigation on the latest snapshot.
+### 3. SQLite Append-Only Triggers
+Implemented in [`backend/app/database.py`](backend/app/database.py):
+- Connect listener on SQLite enabling `PRAGMA foreign_keys = ON` and `PRAGMA journal_mode = WAL`.
+- Physical database triggers installed on `case_events` and `calculation_line_results` that execute `SELECT RAISE(ABORT, '...')` on any attempted `UPDATE` or `DELETE` query, raising an `IntegrityError`.
 
 ---
 
-## 🗄️ Database Schema (14 Tables)
+## ⏳ Planned Features (Phase 2 & Phase 3)
 
-All tables use explicit foreign key constraints, indexes on lookup keys, and JSON support for tiered structures:
+The following components are designed in the architecture but are not yet implemented or tested:
 
-```
-├── Cases & Audit
-│   ├── cases                      # Core dispute records, status, and evidence version
-│   └── case_events                # Append-only audit trail (immutable via trigger)
-│
-├── Invoices & Contracts
-│   ├── invoice_lines              # Disputed line items and original billed amounts
-│   └── contract_rules             # Pricing rules, JSON tiers, exemptions, discounts
-│
-├── Usage & Evidence Snapshots
-│   ├── usage_events               # Metered usage records, quantities, and environments
-│   └── evidence_versions          # Cryptographic SHA-256 snapshot of inputs
-│
-├── Deterministic Calculations
-│   ├── calculations               # Engine run metadata, engine version, total diff
-│   └── calculation_line_results   # Line-level calculation outputs (immutable via trigger)
-│
-├── Investigation & Review
-│   ├── investigation_runs         # LangGraph execution runs and statuses
-│   ├── findings                   # AI findings linked to calculation result anchors
-│   ├── finding_reviews            # Human review decisions (ACCEPT/EDIT/REJECT)
-│   └── resolution_options         # Proposed resolution actions (credit, explanation)
-│
-└── Credits & Accounting
-    ├── credits                    # Approved mock credits (idempotent, capped)
-    └── adjustments                # Historical account credits applied prior to dispute
-```
+- **State Machine Transitions (Planned - Phase 2):** Enforcing allowed transitions between `OPEN`, `AWAITING_INFO`, `RESOLVED`, and `REOPENED`, returning HTTP 409 on invalid transitions.
+- **Staleness Tracking & Rejection (Planned - Phase 2):** Marking findings stale on evidence version increments and rejecting credit approvals linked to stale findings.
+- **Credit Concurrency Locking (Planned - Phase 2):** Transaction locking (`SELECT FOR UPDATE` on PostgreSQL / `BEGIN IMMEDIATE` on SQLite) to enforce cumulative credit caps during concurrent approval attempts.
+- **Duplicate Credit 409 Responses (Planned - Phase 2):** Returning HTTP 409 Conflict when an idempotency key matches an existing record.
+- **PostgreSQL DDL Triggers (Planned - Phase 2):** Translating the append-only SQLite triggers into PostgreSQL PL/pgSQL trigger functions via Alembic migrations.
+- **Agentic Investigation Graph (Planned - Phase 3):** LangGraph multi-node orchestrator using the Google Gemini API with fallback mock mode for testing, citation verification, and evidence-gathering abort logic.
+- **Frontend Workspace (Planned - Phase 4):** React / Vite UI with timeline views, discrepancy diffing, and reviewer approval controls.
 
 ---
 
-## 🧪 Test Suite & Quality Verification
+## 🚫 Excluded Scope
 
-The test suite runs under `pytest` with 100% deterministic reproducibility:
+To maintain project focus and feasibility, the following areas are explicitly out of scope:
+1. **Tax Calculation:** Tax logic, VAT, state sales taxes, and jurisdiction-specific tax exemptions are excluded.
+2. **Real Payment Gateway Integration:** The application issues mock credit records for internal dispute resolution. It does not integrate with Stripe, Adyen, or banking rails.
+3. **PDF / OCR Invoice Extraction:** Invoices and usage data are ingested via structured JSON and CSV formats, not via unstructured document OCR.
+4. **ERP / Accounting Ledger Syncing:** Synchronization with external accounting platforms (NetSuite, QuickBooks) is not implemented.
+
+---
+
+## ⚠️ Known Limitations
+
+1. **Database Triggers Scope:** While database triggers block application-level `UPDATE` and `DELETE` statements, a database administrator or privileged user with DDL permissions can drop triggers.
+2. **Usage Quarantine Validation:** Current event quarantine checks for negative quantities, missing `line_id`/`event_id`, and non-string environment fields. It does not validate environments against an enforced whitelist enum.
+3. **Single Discount Rule:** The engine currently supports a single percentage discount per line item. Multiple discounts on the same line trigger an `AMBIGUOUS` status.
+4. **SQLite Concurrency:** Local development uses SQLite in WAL mode. High-concurrency operations will be verified against PostgreSQL.
+
+---
+
+## 🔌 API Routes (Pending Phase 2)
+
+The following REST API endpoints are designed and will be implemented in Phase 2:
+
+| Method | Endpoint | Description | Status |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/cases` | Create a new dispute case | *Pending (Phase 2)* |
+| `GET` | `/api/cases/{id}` | Retrieve case details, lines, and events | *Pending (Phase 2)* |
+| `POST` | `/api/cases/{id}/transition` | Transition case status (returns 409 if invalid) | *Pending (Phase 2)* |
+| `POST` | `/api/cases/{id}/evidence` | Upload new usage evidence, increments version | *Pending (Phase 2)* |
+| `POST` | `/api/calculations/run` | Execute deterministic recalculation on evidence | *Pending (Phase 2)* |
+| `POST` | `/api/findings/{id}/review` | Submit human review (`ACCEPT`, `EDIT`, `REJECT`) | *Pending (Phase 2)* |
+| `POST` | `/api/credits/approve` | Approve mock credit under row lock and cap check | *Pending (Phase 2)* |
+
+---
+
+## ☁️ Deployment (Pending Phase 2)
+
+Deployment configuration is planned for Phase 2:
+- **Backend Service:** Render Web Service running FastAPI under Python 3.12 via Uvicorn.
+- **Database:** Managed PostgreSQL instance on Neon.
+- **Configuration:** Documented in `render.yaml` with automated health-check endpoints.
+
+---
+
+## 🧪 Test Suite & Verification
+
+The test suite runs under `pytest`:
 
 ```bash
 pytest -v
 ```
 
-### Breakdown of Current 60 Passing Tests:
-- **`TestRoundCents` (6 tests):** Validates `ROUND_HALF_UP` behavior, exact integer handling, and boundary rounding at $0.5$.
-- **`TestFlat` (3 tests):** Validates flat fee billing and usage invariance.
-- **`TestPerUnit` (4 tests):** Validates linear unit pricing, overcharge calculation, and multi-event aggregation.
-- **`TestTieredGraduated` (5 tests):** Validates marginal tier step-functions across 1st, 2nd, and 3rd tier boundaries.
-- **`TestTieredVolume` (4 tests):** Validates retroactive slab tiers and proves different financial output compared to graduated tiering on identical usage.
-- **`TestIncludedUnits` (5 tests):** Validates free allowances, exact boundary thresholds, and overage rate application.
-- **`TestDiscount` (3 tests):** Validates percentage discount math, rounding at fractional boundaries, and ambiguity triggers on multiple discounts.
-- **`TestMinimumCommit` (4 tests):** Validates minimum spend floor enforcement and evaluation order (discount $\rightarrow$ minimum commit).
-- **`TestEnvironmentExemptions` (4 tests):** Validates exclusion of staging/dev usage and zero-bill assertions when all usage is exempt.
-- **`TestQuarantine` (4 tests):** Validates isolation of negative usage, structured quarantine reason logging, and `PARTIAL` engine status.
-- **`TestMissingRule` (2 tests):** Validates graceful handling of unmapped lines returning `INSUFFICIENT_DATA`.
-- **`TestAmbiguousTierType` (3 tests):** Validates dual interpretation generation and `AMBIGUOUS` engine status.
-- **`TestRepeatability` (3 tests):** Validates cryptographic repeatability of `result_id` and `result_hash` across identical runs.
-- **`TestRunCalculation` (3 tests):** Validates total reconciliation and multi-line invoice aggregations.
-- **`TestDatabaseSchemaAndConstraints` (7 tests):**
-  - Confirms creation of all 14 database tables.
-  - Verifies SQLite foreign key enforcement (`PRAGMA foreign_keys = ON`).
-  - Confirms `case_events` append-only trigger prevents `UPDATE` and `DELETE`.
-  - Confirms `calculation_line_results` trigger blocks modifications.
-  - Validates `Credit` idempotency key unique constraint.
-  - Validates JSON column serialization and deserialization.
+### 60 Passing Tests (Phase 1):
+- **Pricing & Calculation Logic (53 tests in [`backend/tests/test_billing_engine.py`](backend/tests/test_billing_engine.py)):**
+  - Boundary rounding (`ROUND_HALF_UP`, half-away-from-zero).
+  - Flat, per-unit, tiered graduated, and tiered volume calculations.
+  - Included units with overage rate application.
+  - Discounts and minimum spend commit floors.
+  - Environment exemptions and zero-billing verification.
+  - Quarantine of negative usage quantities.
+  - Dual interpretation generation for unspecified tier types.
+  - Repeatability and determinism of cryptographic `result_id` anchors.
+- **Schema & Triggers (7 tests in [`backend/tests/test_models_and_db.py`](backend/tests/test_models_and_db.py)):**
+  - Table creation verification for all 14 models.
+  - Foreign key constraint rejection on SQLite.
+  - Append-only trigger verification blocking `UPDATE` on `case_events`.
+  - Append-only trigger verification blocking `DELETE` on `case_events`.
+  - Append-only trigger verification blocking modifications on `calculation_line_results`.
+  - Unique constraint enforcement on `Credit.idempotency_key`.
+  - JSON serialization of contract tiers and exemption lists.
 
 ---
 
-## 🚀 Quickstart & Local Development
+## 🚀 Quickstart & Local Setup
 
-### Prerequisites
-- Python 3.12+
-- Git
-
-### 1. Clone & Enter Repository
+### 1. Clone & Enter Directory
 ```bash
 git clone https://github.com/abhi-1289-9821/async-task.git
 cd async-task
@@ -247,9 +212,11 @@ DATABASE_URL=sqlite:///./billing_disputes.db
 ENVIRONMENT=development
 PORT=8000
 DEBUG=false
-DEMO_AUTH_TOKEN=demo-reviewer-token-2026
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-2.5-flash
+DEMO_REVIEWER_TOKEN=your-reviewer-token-here
+DEMO_VIEWER_TOKEN=your-viewer-token-here
+GEMINI_API_KEY=your-gemini-api-key-here
+GEMINI_MODEL=gemini-2.0-flash
+LLM_MODE=real
 ```
 
 ### 3. Setup Virtual Environment
@@ -265,57 +232,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Run the Full Test Suite
+### 4. Run Test Suite
 ```bash
 pytest -v
 ```
 
 ---
 
-## 🗺️ Implementation Roadmap
+## 📚 Documentation & Engineering Logs
 
-- [x] **Phase 0: Architecture & Risk Evaluation**
-  - Specification of business rules, rounding invariants, pricing models, and technical risks.
-- [x] **Phase 1: Deterministic Engine & Core Schema**
-  - Pure calculation engine (`Decimal`, `ROUND_HALF_UP`), 14 SQLAlchemy ORM models, append-only triggers, 60 passing tests.
-- [ ] **Phase 2: FastAPI Backend, Audit Log & State Machine**
-  - API routers, transition validation (invalid $\rightarrow$ 409), credit approval service with locking, Render/Neon deployment configuration.
-- [ ] **Phase 3: Agentic Investigation (LangGraph + Gemini)**
-  - Two-phase investigation workflow, deterministic citation guardrails, mock/real LLM toggles, evidence-gathering abort logic.
-- [ ] **Phase 4: Frontend Audit Workspace (React + Vite)**
-  - Visual timeline, invoice discrepancy breakdown, side-by-side human review editor, interactive credit approval interface.
-- [ ] **Phase 5: Evaluation Scenarios & Final Submission**
-  - 6 end-to-end benchmark scenarios (overcharges, volume tiers, staging exemptions, prompt injection defense, concurrency tests).
-
----
-
-## 💬 Interview Defense & Architecture Q&A
-
-#### Q1: Why use Python `Decimal` and integer cents instead of standard floating-point numbers?
-> **Answer:** Binary floating-point numbers (IEEE 754) cannot represent base-10 fractions (such as 0.1 or 0.7) exactly. When performing aggregations over millions of usage events or computing tiered slabs, rounding drift accumulates and causes legal and compliance discrepancies. We store all financial values as integer cents ($10.00 = 1000$ cents) and execute calculations using `Decimal` with explicit `ROUND_HALF_UP` semantics.
-
-#### Q2: Why enforce the append-only invariant at the database trigger level instead of in the ORM?
-> **Answer:** Application-layer checks can be bypassed by raw SQL statements, database migration scripts, administrative consoles, or ORM update bugs. A database trigger with `RAISE(ABORT)` makes the table physically immutable at the storage engine level, providing mathematical guarantees for compliance audits (SOC 2, ISO 27001).
-
-#### Q3: What is the fundamental difference between Graduated and Volume tiering?
-> **Answer:** Graduated tiering is marginal: usage is sliced across tier brackets, and each bracket is priced at its own rate. Volume tiering is a retroactive cliff: once total volume crosses a tier threshold, all units are retroactively priced at that lower rate. Our engine explicitly handles both, with inclusive upper bounds, and flags underspecified contracts with an `AMBIGUOUS` status.
-
-#### Q4: How do you prevent double-crediting if two reviewers click "Approve Credit" simultaneously?
-> **Answer:** We combine three layers:
-> 1. A cryptographic idempotency key: `SHA-256(case_id + line_id + reason_code)` with a unique constraint in the DB.
-> 2. Concurrency locking: `SELECT FOR UPDATE` on PostgreSQL or `BEGIN IMMEDIATE` on SQLite to lock the row during evaluation.
-> 3. Atomic cumulative cap checking: verifying that the approved amount does not exceed the remaining eligible overcharge balance.
-
-#### Q5: Why shouldn't an LLM calculate the refund amount directly?
-> **Answer:** Large Language Models are probabilistic next-token predictors. They have no internal arithmetic unit and frequently produce subtle, non-deterministic calculation errors. In our architecture, the LLM is restricted to narrative synthesis and evidence citation. The dollar amount for any credit recommendation is strictly retrieved from the deterministic `calculation_line_result_id`.
-
----
-
-## 📜 Engineering Log & Transparency
-
-To ensure complete transparency and code defense, every technical decision, rejected assumption, and error correction is recorded chronologically in [`docs/agent_log.md`](file:///d:/agg/docs/agent_log.md).
-
-Key recorded engineering events include:
-- **Dependency Conflict Resolution:** Reconciled `langchain-core` and `pydantic` version pins against `langgraph` and `google-genai` prior to writing application code.
-- **Negative Rounding Correction:** Documented Python's `Decimal` `ROUND_HALF_UP` behavior on negative boundaries (rounds away from zero, so $-0.5 \rightarrow -1$).
-- **SQLite Trigger Exception Mapping:** Documented that SQLite translates `RAISE(ABORT)` triggers to `sqlite3.IntegrityError` (wrapped by SQLAlchemy as `sqlalchemy.exc.IntegrityError`), ensuring correct test assertions.
+- **Technical Interview Prep:** [`INTERVIEW_PREP.md`](INTERVIEW_PREP.md) contains detailed questions, answers, and trade-off discussions.
+- **Engineering Audit Log:** [`docs/agent_log.md`](docs/agent_log.md) records all development decisions, dependency adjustments, and test corrections chronologically.
+- **Agent Usage Summary:** Finalized in [`docs/AGENT_USAGE.md`](docs/AGENT_USAGE.md) at the conclusion of Phase 5.

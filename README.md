@@ -277,6 +277,14 @@ pip install -r requirements.txt
 pytest -v
 ```
 
+### 5. Launch Frontend UI
+```bash
+cd ../frontend
+npm install
+npm run dev
+# Access UI at http://localhost:5173
+```
+
 ---
 
 ## 🗺️ Implementation Roadmap
@@ -285,7 +293,7 @@ pytest -v
 - [x] **Phase 1: Deterministic Engine & Core Schema** (60 passing tests)
 - [x] **Phase 2: FastAPI Backend, Audit Log & State Machine** (75 passing tests, concurrency stress tested)
 - [x] **Phase 3: Agentic Investigation (LangGraph + Gemini)** (84 passing tests, citation & injection defense)
-- [ ] **Phase 4: Frontend Audit Workspace (React + Vite)**
+- [x] **Phase 4: Frontend Audit Workspace (React + Vite)** (Dark mode UI, scenario presets, interactive review)
 - [ ] **Phase 5: End-to-End Scenarios & Demonstration Workflows**
 
 ---

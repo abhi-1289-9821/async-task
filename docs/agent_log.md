@@ -117,4 +117,19 @@ Each entry: Phase, timestamp, category, event, fix, status.
 - **Outcome**: All 84 tests pass (1 skipped for PostgreSQL in CI).
 - **Status**: resolved
 
+---
+
+## Phase 4
+
+### [Phase 4] [2026-10-13 14:50] — React + Vite frontend workspace
+- **Event**: Built full-stack React + Vite single page application with glassmorphism dark theme, custom vanilla CSS design tokens, and Lucide icons.
+- **Components Built**:
+  - `Navbar`: Header with live API connection probe and interactive `REVIEWER` / `VIEWER` Bearer token identity switcher.
+  - `CaseList`: Overview with financial exposure stats, status filters (`OPEN`, `AWAITING_INFO`, `RESOLVED`, `REOPENED`), search input, and dispute table.
+  - `CreateCaseModal`: Case creation form with 1-click test scenario presets (Tier overcharge, contract ambiguity, clean match, prompt injection attack).
+  - `EvidenceModal`: Ingests usage telemetry, demonstrably bumping evidence versions, marking findings stale, and reopening resolved cases.
+  - `CaseDetail`: Multi-tab inspection suite containing Deterministic Calculation runner, LangGraph AI investigation panel, human review modal (`ACCEPT`, `EDIT`, `REJECT`), concurrency-safe credit locking approval, and append-only audit timeline.
+- **Outcome**: Built production client bundle in 1.35s with 0 errors via `npm run build`.
+- **Status**: resolved
+
 

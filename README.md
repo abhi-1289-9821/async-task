@@ -24,7 +24,7 @@ A full-stack AI-assisted application designed to investigate, recalculate, and r
 - [Known Limitations](#-known-limitations)
 - [API Routes](#-api-routes)
 - [Deployment](#-deployment)
-- [Test Suite & Verification (75 Passing Tests)](#-test-suite--verification-75-passing-tests)
+- [Test Suite & Verification (84 Passing Tests)](#-test-suite--verification-84-passing-tests)
 - [Quickstart & Local Setup](#-quickstart--local-setup)
 - [Implementation Roadmap](#-implementation-roadmap)
 - [Documentation & Engineering Logs](#-documentation--engineering-logs)
@@ -143,9 +143,8 @@ Implemented in [`backend/app/middleware/auth.py`](backend/app/middleware/auth.py
 
 ## ⏳ Planned Features (Phase 3 & Phase 4)
 
-- **Agentic Investigation Graph (Planned - Phase 3):** LangGraph multi-node orchestrator using the Google Gemini API with fallback mock mode for testing, citation verification, and evidence-gathering abort logic.
 - **Frontend Workspace (Planned - Phase 4):** React / Vite UI with timeline views, discrepancy diffing, and reviewer approval controls.
-- **Evaluation Benchmark Suite (Planned - Phase 5):** 6 end-to-end evaluation scenarios (overcharges, volume slabs, staging exemptions, prompt injection defense, concurrency tests).
+- **Integration Scenario Suite (Planned - Phase 5):** 6 end-to-end scenarios (overcharges, volume slabs, staging exemptions, prompt injection defense, concurrency tests).
 
 ---
 
@@ -196,7 +195,7 @@ To maintain project focus and feasibility, the following areas are explicitly ou
 
 ---
 
-## 🧪 Test Suite & Verification (75 Passing Tests)
+## 🧪 Test Suite & Verification (84 Passing Tests)
 
 The test suite runs under `pytest`:
 
@@ -285,9 +284,9 @@ pytest -v
 - [x] **Phase 0: Architecture & Risk Evaluation**
 - [x] **Phase 1: Deterministic Engine & Core Schema** (60 passing tests)
 - [x] **Phase 2: FastAPI Backend, Audit Log & State Machine** (75 passing tests, concurrency stress tested)
-- [ ] **Phase 3: Agentic Investigation (LangGraph + Gemini)**
+- [x] **Phase 3: Agentic Investigation (LangGraph + Gemini)** (84 passing tests, citation & injection defense)
 - [ ] **Phase 4: Frontend Audit Workspace (React + Vite)**
-- [ ] **Phase 5: Evaluation Scenarios & Submission Artifacts**
+- [ ] **Phase 5: End-to-End Scenarios & Demonstration Workflows**
 
 ---
 

@@ -583,7 +583,7 @@ class TestCreditApprovalAndConcurrencyCap:
         data = r1.json()
         assert data["amount_cents"] == 3000
         assert data["reason_code"] == "RATE_ERROR"
-        assert data["approved_by"] == "reviewer@aggroso.com"
+        assert data["approved_by"] == "reviewer@acmebilling.com"
 
         # 2. Exact same request: duplicate idempotency key returns HTTP 409 Conflict
         r2 = client.post(

@@ -121,7 +121,7 @@ def test_concurrent_credit_approvals_hold_cumulative_cap(isolated_db):
         review = FindingReview(
             finding_id=find_id,
             action="ACCEPT",
-            reviewer="lead_auditor@aggroso.com",
+            reviewer="lead_auditor@acmebilling.com",
             original_ai_text="Overcharge eligible for credit",
         )
         db.add(review)
@@ -137,7 +137,7 @@ def test_concurrent_credit_approvals_hold_cumulative_cap(isolated_db):
                     invoice_line_id=line_id,
                     reason_code=f"CONCURRENCY_TEST_{worker_id}",
                     finding_id=find_id,
-                    actor=f"worker_{worker_id}@aggroso.com",
+                    actor=f"worker_{worker_id}@acmebilling.com",
                 )
                 return ("SUCCESS", credit.amount_cents)
             except Exception as exc:

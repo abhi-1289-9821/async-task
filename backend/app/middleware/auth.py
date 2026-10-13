@@ -47,11 +47,11 @@ def get_current_user(
 
     # Check reviewer token
     if token == settings.demo_reviewer_token:
-        return AuthUser(identity="reviewer@aggroso.com", role="REVIEWER")
+        return AuthUser(identity="reviewer@acmebilling.com", role="REVIEWER")
 
     # Check viewer token
     if token == settings.demo_viewer_token:
-        return AuthUser(identity="viewer@aggroso.com", role="VIEWER")
+        return AuthUser(identity="viewer@acmebilling.com", role="VIEWER")
 
     # Invalid token
     raise HTTPException(

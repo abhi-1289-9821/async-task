@@ -91,7 +91,7 @@ class TestDatabaseSchemaAndConstraints:
         event = CaseEvent(
             case_id="case-101",
             event_type="STATUS_CHANGED",
-            actor="analyst@aggroso.com",
+            actor="analyst@acmebilling.com",
             details={"from": "OPEN", "to": "RESOLVED"}
         )
         db_session.add(event)

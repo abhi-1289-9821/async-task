@@ -226,36 +226,47 @@ def call_llm(
     from google import genai
     from google.genai import types
 
-    # Bounded retries (max 2 attempts)
+    # Candidate models: try configured model first, then fallback to current stable models
+    configured_model = settings.gemini_model or "gemini-3.1-flash-lite"
+    candidate_models = [configured_model]
+    for fallback in ["gemini-3.1-flash-lite", "gemini-3.8-flash"]:
+        if fallback not in candidate_models:
+            candidate_models.append(fallback)
+
     last_err: Optional[Exception] = None
-    for attempt in range(2):
-        try:
-            client = genai.Client(
-                api_key=settings.gemini_api_key,
-                http_options=types.HttpOptions(timeout=timeout_sec * 1000),
-            )
-            config = types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type="application/json",
-            )
-            model_name = settings.gemini_model or "gemini-3.8-flash"
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=config,
-            )
+    client = genai.Client(
+        api_key=settings.gemini_api_key,
+        http_options=types.HttpOptions(timeout=timeout_sec * 1000),
+    )
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        response_mime_type="application/json",
+    )
 
-            tokens = {
-                "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) if response.usage_metadata else 0,
-                "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) if response.usage_metadata else 0,
-                "total_tokens": getattr(response.usage_metadata, "total_token_count", 0) if response.usage_metadata else 0,
-            }
-            return (response.text or "", tokens)
-        except Exception as e:
-            logger.warning("Gemini LLM call attempt %d failed: %s", attempt + 1, e)
-            last_err = e
+    for model_name in candidate_models:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=config,
+                )
 
-    raise RuntimeError(f"Gemini LLM call failed after 2 attempts: {last_err}")
+                tokens = {
+                    "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) if response.usage_metadata else 0,
+                    "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) if response.usage_metadata else 0,
+                    "total_tokens": getattr(response.usage_metadata, "total_token_count", 0) if response.usage_metadata else 0,
+                }
+                return (response.text or "", tokens)
+            except Exception as e:
+                logger.warning("Gemini LLM call (model=%s, attempt=%d) failed: %s", model_name, attempt + 1, e)
+                last_err = e
+                # If model is deprecated / not found (404), skip retrying this model and advance to next candidate immediately
+                err_str = str(e)
+                if "404" in err_str or "NOT_FOUND" in err_str:
+                    break
+
+    raise RuntimeError(f"Gemini LLM call failed across models {candidate_models}: {last_err}")
 
 
 def generate_investigation_findings(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:

@@ -8,12 +8,13 @@
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
 // Tokens are strictly user-supplied or loaded from session/localStorage.
-// No secret tokens are baked into the production bundle.
+// In dev mode only (import.meta.env.DEV), falls back to local demo token for convenience.
+// In production builds, import.meta.env.DEV compiles to false and is tree-shaken away with 0 secrets baked in.
 export function getToken(role = currentRole) {
   if (role === 'REVIEWER') {
-    return localStorage.getItem('billing_reviewer_token') || sessionStorage.getItem('billing_reviewer_token') || '';
+    return localStorage.getItem('billing_reviewer_token') || sessionStorage.getItem('billing_reviewer_token') || (import.meta.env.DEV ? 'demo-reviewer-token-change-me' : '');
   }
-  return localStorage.getItem('billing_viewer_token') || sessionStorage.getItem('billing_viewer_token') || '';
+  return localStorage.getItem('billing_viewer_token') || sessionStorage.getItem('billing_viewer_token') || (import.meta.env.DEV ? 'demo-viewer-token-change-me' : '');
 }
 
 let currentRole = 'REVIEWER';

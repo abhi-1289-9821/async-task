@@ -26,8 +26,8 @@ class Settings(BaseSettings):
     # ── AI (Phase 3) ──────────────────────────────────────────────────────────
     # GEMINI_API_KEY must be set before Phase 3. LLM_MODE=mock bypasses it in tests.
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"  # Verified Gemini model
-    llm_mode: str = "real"                  # "mock" for automated tests; "real" for live
+    gemini_model: str = "gemini-3.1-flash-lite"  # Verified active Gemini model
+    llm_mode: str = "real"                      # "mock" for automated tests; "real" for live
 
     # Two tokens map to REVIEWER and VIEWER roles.
     # In production, default tokens are strictly disallowed by validator below.

@@ -5,6 +5,8 @@ import { getActiveRole, setActiveRole, checkHealth, getToken, setCustomToken } f
 export default function Navbar({ onSelectCase, activeCaseId }) {
   const [role, setRole] = useState(getActiveRole());
   const [isHealthy, setIsHealthy] = useState(true);
+  const [showTokenModal, setShowTokenModal] = useState(false);
+  const [tokenInput, setTokenInput] = useState('');
 
   useEffect(() => {
     checkHealth()
@@ -15,6 +17,17 @@ export default function Navbar({ onSelectCase, activeCaseId }) {
   const handleRoleToggle = (newRole) => {
     setActiveRole(newRole);
     setRole(newRole);
+  };
+
+  const openTokenModal = () => {
+    setTokenInput(getToken(role));
+    setShowTokenModal(true);
+  };
+
+  const handleSaveToken = () => {
+    setCustomToken(role, tokenInput);
+    setShowTokenModal(false);
+    setRole((r) => r);
   };
 
   return (
@@ -46,18 +59,11 @@ export default function Navbar({ onSelectCase, activeCaseId }) {
           type="button"
           className="role-pill-btn"
           style={{ borderColor: getToken(role) ? '#34d399' : '#f59e0b', color: getToken(role) ? '#34d399' : '#f59e0b' }}
-          onClick={() => {
-            const current = getToken(role);
-            const val = window.prompt(`Enter personal ${role} Bearer Token:`, current);
-            if (val !== null) {
-              setCustomToken(role, val);
-              setRole((r) => r);
-            }
-          }}
+          onClick={openTokenModal}
           title="Configure personal Bearer token (never stored in bundle)"
         >
           <Key size={13} />
-          <span>{getToken(role) ? 'Token Configured' : 'Set Token'}</span>
+          <span>{getToken(role) ? 'Token Active' : 'Set Token'}</span>
         </button>
 
         {/* Demo Role Switcher */}
@@ -80,6 +86,60 @@ export default function Navbar({ onSelectCase, activeCaseId }) {
           </button>
         </div>
       </div>
+
+      {showTokenModal && (
+        <div className="modal-backdrop">
+          <div className="modal-card" style={{ maxWidth: '480px' }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Key size={18} color="#38bdf8" />
+                <h3 className="modal-title">Configure {role} Session Token</h3>
+              </div>
+            </div>
+            <div className="modal-body">
+              <p style={{ fontSize: '0.82rem', color: '#94a3b8', marginBottom: '1rem', lineHeight: '1.4' }}>
+                Bearer tokens authenticate reviewer and viewer actions. Tokens are stored only in your local browser session and are never baked into client code bundles.
+              </p>
+              <div className="form-group">
+                <label className="form-label">Personal Bearer Token</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder={`Enter ${role.toLowerCase()} token...`}
+                  value={tokenInput}
+                  onChange={(e) => setTokenInput(e.target.value)}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
+                  onClick={() => setTokenInput('')}
+                >
+                  Clear Token
+                </button>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowTokenModal(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleSaveToken}
+              >
+                Save Token
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
   );
 }

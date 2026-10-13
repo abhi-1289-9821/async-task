@@ -241,6 +241,6 @@ pytest -v
 
 ## 📚 Documentation & Engineering Logs
 
-- **Technical Interview Prep:** [`INTERVIEW_PREP.md`](INTERVIEW_PREP.md) contains detailed questions, answers, and trade-off discussions.
 - **Engineering Audit Log:** [`docs/agent_log.md`](docs/agent_log.md) records all development decisions, dependency adjustments, and test corrections chronologically.
 - **Agent Usage Summary:** Finalized in [`docs/AGENT_USAGE.md`](docs/AGENT_USAGE.md) at the conclusion of Phase 5.
+

@@ -51,3 +51,6 @@ logs/
 
 # ── Alembic auto-generated ────────────────────────────────────────────────────
 backend/migrations/versions/*.py
+
+# ── Private Interview Notes ───────────────────────────────────────────────────
+INTERVIEW_PREP.md

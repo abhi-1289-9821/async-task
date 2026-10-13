@@ -16,6 +16,8 @@ class CreditApproveRequest(BaseModel):
     finding_id: str = Field(..., min_length=1, max_length=36)
     resolution_option_id: Optional[str] = Field(None, max_length=36)
     reason_note: Optional[str] = Field(None, max_length=1000)
+    requested_amount_cents: Optional[int] = Field(None, gt=0)
+    idempotency_key: Optional[str] = Field(None, max_length=64)
 
 
 class CreditResponse(BaseModel):

@@ -728,3 +728,19 @@ class TestEngineRegressions:
         assert res.finding_type == FindingType.AMBIGUOUS
         assert "conflicting primary" in res.explanation.lower()
 
+    def test_result_id_differs_when_discount_or_commit_applied(self):
+        """50% discount and minimum commit must alter result_id cryptographic anchor."""
+        line = make_line(original_cents=10000)
+        primary = make_rule(RuleType.PER_UNIT, rate_cents=100, rule_id="R_PER_UNIT")
+        discount = make_rule(RuleType.DISCOUNT_PCT, discount_pct=Decimal("50"), rule_id="R_DISC")
+        commit = make_rule(RuleType.MINIMUM_COMMIT, minimum_commit_cents=50000, rule_id="R_COMMIT")
+        events = [make_event(qty=100)]
+
+        res_base = calculate_line(line, [primary], events)
+        res_disc = calculate_line(line, [primary, discount], events)
+        res_commit = calculate_line(line, [primary, commit], events)
+
+        assert res_base.result_id != res_disc.result_id
+        assert res_base.result_id != res_commit.result_id
+        assert res_disc.result_id != res_commit.result_id
+

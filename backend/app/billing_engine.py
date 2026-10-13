@@ -273,8 +273,6 @@ def _partition_events(
     quarantined: list[QuarantinedEvent] = []
 
     for ev in events:
-        if ev.line_id != line_id:
-            continue
         reason = _validate_event(ev)
         if reason:
             quarantined.append(QuarantinedEvent(
@@ -282,7 +280,10 @@ def _partition_events(
                 reason=reason,
                 raw=ev.raw,
             ))
-        elif ev.environment in exempt_environments:
+            continue
+        if ev.line_id != line_id:
+            continue
+        if ev.environment in exempt_environments:
             exempt.append(ev)
         else:
             billable.append(ev)
@@ -314,10 +315,14 @@ def _compute_result_id(
     quantity: Decimal,
     rule_type: RuleType,
     rule: ContractRule | None = None,
+    rules: list[ContractRule] | None = None,
     original_amount_cents: int = 0,
+    applied_discount_pct: Decimal = Decimal("0"),
+    applied_minimum_commit_cents: int = 0,
 ) -> str:
     """
-    Deterministic result ID: SHA-256 of the pricing inputs.
+    Deterministic result ID: SHA-256 of all pricing inputs.
+    Covers rates, tiers, discounts, commitments, original amount, and quantities.
     Same inputs always produce the same ID — safe to cite in findings.
     """
     payload_dict: dict[str, Any] = {
@@ -326,9 +331,12 @@ def _compute_result_id(
         "quantity": str(quantity),
         "rule_type": rule_type.value,
         "original_amount_cents": original_amount_cents,
+        "applied_discount_pct": str(applied_discount_pct),
+        "applied_minimum_commit_cents": applied_minimum_commit_cents,
     }
-    if rule:
-        payload_dict["rule"] = _serialize_rule(rule)
+    all_rules = list(rules) if rules else ([rule] if rule else [])
+    if all_rules:
+        payload_dict["rules"] = sorted([_serialize_rule(r) for r in all_rules], key=lambda x: x["rule_id"])
     payload = json.dumps(payload_dict, sort_keys=True)
     return "res_" + hashlib.sha256(payload.encode()).hexdigest()[:16]
 
@@ -498,6 +506,35 @@ def calculate_line(
             assumptions=[],
         )
 
+    # Engine-level input validation for discount rules
+    if discount_rules and (discount_rules[0].discount_pct < Decimal("0") or discount_rules[0].discount_pct > Decimal("100")):
+        return _make_insufficient_data_result(
+            line, discount_rules[0].rule_id,
+            f"Invalid discount percentage {discount_rules[0].discount_pct}% (must be between 0 and 100)",
+            quarantined_all,
+        )
+
+    # Engine-level input validation for tiered rules
+    for r in primary_rules:
+        if r.rule_type in (RuleType.TIERED_GRADUATED, RuleType.TIERED_VOLUME):
+            if not r.tiers:
+                return _make_insufficient_data_result(
+                    line, r.rule_id, "Tiered rule has empty or missing tiers", quarantined_all
+                )
+            prev_bound = Decimal("0")
+            for t in r.tiers:
+                if t.price_per_unit_cents < 0:
+                    return _make_insufficient_data_result(
+                        line, r.rule_id, f"Negative tier rate {t.price_per_unit_cents}", quarantined_all
+                    )
+                if t.up_to is not None:
+                    bound = Decimal(t.up_to)
+                    if bound <= prev_bound:
+                        return _make_insufficient_data_result(
+                            line, r.rule_id, f"Tiers must have strictly increasing upper bounds ({bound} <= {prev_bound})", quarantined_all
+                        )
+                    prev_bound = bound
+
     # ── 5. Guard: multiple primary rules ──────────────────────────────────────
     has_graduated = any(r.rule_type == RuleType.TIERED_GRADUATED for r in primary_rules)
     has_volume    = any(r.rule_type == RuleType.TIERED_VOLUME    for r in primary_rules)
@@ -527,7 +564,10 @@ def calculate_line(
 
         if grad_uncovered or vol_uncovered:
             return LineCalculationResult(
-                result_id=_compute_result_id(line.line_id, grad_rule.rule_id, quantity, RuleType.TIERED_GRADUATED, rule=grad_rule, original_amount_cents=line.original_amount_cents),
+                result_id=_compute_result_id(
+                    line.line_id, grad_rule.rule_id, quantity, RuleType.TIERED_GRADUATED,
+                    rules=rules_for_line, original_amount_cents=line.original_amount_cents
+                ),
                 line_id=line.line_id,
                 rule_id=grad_rule.rule_id,
                 original_amount_cents=line.original_amount_cents,
@@ -560,7 +600,11 @@ def calculate_line(
         vol_amt  = _round_cents(vol_raw)
 
         return LineCalculationResult(
-            result_id=_compute_result_id(line.line_id, grad_rule.rule_id, quantity, RuleType.TIERED_GRADUATED, rule=grad_rule, original_amount_cents=line.original_amount_cents),
+            result_id=_compute_result_id(
+                line.line_id, grad_rule.rule_id, quantity, RuleType.TIERED_GRADUATED,
+                rules=rules_for_line, original_amount_cents=line.original_amount_cents,
+                applied_discount_pct=applied_disc, applied_minimum_commit_cents=applied_commit
+            ),
             line_id=line.line_id,
             rule_id=grad_rule.rule_id,
             original_amount_cents=line.original_amount_cents,
@@ -712,7 +756,11 @@ def calculate_line(
         explanation = f"Billing is correct at {recalculated}¢."
 
     return LineCalculationResult(
-        result_id=_compute_result_id(line.line_id, primary.rule_id, quantity, primary.rule_type, rule=primary, original_amount_cents=line.original_amount_cents),
+        result_id=_compute_result_id(
+            line.line_id, primary.rule_id, quantity, primary.rule_type,
+            rules=rules_for_line, original_amount_cents=line.original_amount_cents,
+            applied_discount_pct=applied_discount_pct, applied_minimum_commit_cents=applied_commit,
+        ),
         line_id=line.line_id,
         rule_id=primary.rule_id,
         original_amount_cents=line.original_amount_cents,
@@ -780,9 +828,41 @@ def run_calculation(
     line_results: list[LineCalculationResult] = []
     all_quarantined: list[QuarantinedEvent] = []
 
+    valid_line_ids = {line.line_id for line in lines}
+    seen_event_ids: set[str] = set()
+    cleaned_events: list[UsageEvent] = []
+
+    for ev in events:
+        if ev.event_id in seen_event_ids:
+            all_quarantined.append(QuarantinedEvent(
+                event_id=ev.event_id,
+                reason=f"Duplicate event_id '{ev.event_id}'",
+                raw=ev.raw,
+            ))
+            continue
+        seen_event_ids.add(ev.event_id)
+
+        if not ev.line_id:
+            all_quarantined.append(QuarantinedEvent(
+                event_id=ev.event_id,
+                reason="Missing line_id",
+                raw=ev.raw,
+            ))
+            continue
+
+        if ev.line_id not in valid_line_ids:
+            all_quarantined.append(QuarantinedEvent(
+                event_id=ev.event_id,
+                reason=f"Unknown line_id '{ev.line_id}'",
+                raw=ev.raw,
+            ))
+            continue
+
+        cleaned_events.append(ev)
+
     for line in lines:
         line_rules  = [r for r in rules  if r.line_id == line.line_id]
-        line_events = [e for e in events if e.line_id == line.line_id]
+        line_events = [e for e in cleaned_events if e.line_id == line.line_id]
         result = calculate_line(line, line_rules, line_events)
         line_results.append(result)
         all_quarantined.extend(result.quarantined_events)

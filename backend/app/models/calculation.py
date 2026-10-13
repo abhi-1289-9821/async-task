@@ -91,9 +91,7 @@ class CalculationLineResult(Base):
     calculation_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("calculations.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    line_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("invoice_lines.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    line_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     result_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)  # "res_" + 16 hex chars
     rule_id: Mapped[str] = mapped_column(String(36), nullable=False)
     original_amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -112,7 +110,6 @@ class CalculationLineResult(Base):
     quarantined_events: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     calculation: Mapped["Calculation"] = relationship(back_populates="line_results")
-    invoice_line: Mapped["InvoiceLine"] = relationship(back_populates="calculation_line_results")  # noqa: F821
     resolution_options: Mapped[list["ResolutionOption"]] = relationship(  # noqa: F821
         back_populates="calculation_line_result"
     )

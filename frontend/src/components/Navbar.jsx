@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Shield, Eye, ShieldCheck, Activity, Cpu } from 'lucide-react';
-import { getActiveRole, setActiveRole, checkHealth } from '../api/client';
+import { Eye, ShieldCheck, Activity, Cpu, Key } from 'lucide-react';
+import { getActiveRole, setActiveRole, checkHealth, getToken, setCustomToken } from '../api/client';
 
 export default function Navbar({ onSelectCase, activeCaseId }) {
   const [role, setRole] = useState(getActiveRole());
@@ -41,8 +41,27 @@ export default function Navbar({ onSelectCase, activeCaseId }) {
           <span>{isHealthy ? 'API Online' : 'API Disconnected'}</span>
         </div>
 
+        {/* Token Management */}
+        <button
+          type="button"
+          className="role-pill-btn"
+          style={{ borderColor: getToken(role) ? '#34d399' : '#f59e0b', color: getToken(role) ? '#34d399' : '#f59e0b' }}
+          onClick={() => {
+            const current = getToken(role);
+            const val = window.prompt(`Enter personal ${role} Bearer Token:`, current);
+            if (val !== null) {
+              setCustomToken(role, val);
+              setRole((r) => r);
+            }
+          }}
+          title="Configure personal Bearer token (never stored in bundle)"
+        >
+          <Key size={13} />
+          <span>{getToken(role) ? 'Token Configured' : 'Set Token'}</span>
+        </button>
+
         {/* Demo Role Switcher */}
-        <div className="role-pill-group" title="Switch Demo Bearer Token Identity">
+        <div className="role-pill-group" title="Switch Role Identity">
           <button
             type="button"
             className={`role-pill-btn ${role === 'REVIEWER' ? 'active-reviewer' : ''}`}

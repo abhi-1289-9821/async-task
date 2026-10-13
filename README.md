@@ -309,13 +309,14 @@ npm run dev
 
 - [x] **Phase 0: Architecture & Risk Evaluation**
 - [x] **Phase 1: Deterministic Engine & Core Schema** (60 passing tests)
+- [x] **Phase 2: Database Layer, Audit Trail & State Transitions** (Schema constraints, triggers, immutability, concurrency locking)
 - [x] **Phase 3: Agentic Investigation (LangGraph + Gemini)** (86 passing tests, citation & injection defense)
 - [x] **Phase 4: Frontend Audit Workspace (React + Vite)** (Dark mode UI, scenario presets, interactive review)
-- [x] **Phase 5: End-to-End Scenarios & Demonstration Workflows** (98 passing tests, live API & UI verification)
+- [x] **Phase 5: End-to-End Scenarios & Demonstration Workflows** (99+ passing tests, live API & UI verification)
 
 ---
 
 ## 📚 Documentation & Engineering Logs
 
 - **Engineering Audit Log:** [`docs/agent_log.md`](docs/agent_log.md) records all development decisions, dependency adjustments, and test corrections chronologically.
-- **Agent Usage Summary:** Finalized in [`docs/AGENT_USAGE.md`](docs/AGENT_USAGE.md) at the conclusion of Phase 5.
+- **Agent Usage Guide:** Available in [`docs/AGENT_USAGE.md`](docs/AGENT_USAGE.md) detailing architecture, security controls, and operational workflows.

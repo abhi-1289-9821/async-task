@@ -22,7 +22,3 @@ services:
         sync: false
       - key: DEMO_VIEWER_TOKEN
         sync: false
-      - key: VITE_DEMO_REVIEWER_TOKEN
-        sync: false
-      - key: VITE_DEMO_VIEWER_TOKEN
-        sync: false

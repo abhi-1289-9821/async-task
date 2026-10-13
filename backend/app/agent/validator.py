@@ -193,21 +193,21 @@ def extract_monetary_amounts_cents(text: str) -> list[tuple[str, int]]:
         return []
     results = []
 
-    # Match $50, $50.00, $0.50
-    dollar_matches = re.finditer(r"\$([0-9]+(?:\.[0-9]{1,2})?)", text)
+    # Match $50, $50.00, $0.50, $1,000.00, $9,999.99 (with optional comma grouping)
+    dollar_matches = re.finditer(r"\$([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)", text)
     for m in dollar_matches:
         raw_str = m.group(0)
-        num_str = m.group(1)
+        num_str = m.group(1).replace(",", "")
         try:
             val_cents = int((Decimal(num_str) * 100).to_integral_value())
             results.append((raw_str, val_cents))
         except Exception:
             pass
 
-    # Match 5000¢ or 5000 cents
-    cent_matches = re.finditer(r"\b([0-9]+)\s*(?:¢|cents)\b", text, re.IGNORECASE)
+    # Match 5000¢, 5000 cents, 5000 cent (handles punctuation like 5000¢. without \b failure on non-word ¢)
+    cent_matches = re.finditer(r"(?<![0-9])([0-9]+)\s*(?:¢|cents?)(?![a-zA-Z0-9])", text, re.IGNORECASE)
     for m in cent_matches:
-        raw_str = m.group(0)
+        raw_str = m.group(0).strip()
         num_str = m.group(1)
         try:
             val_cents = int(num_str)

@@ -229,6 +229,28 @@ def install_append_only_triggers(target_engine=None):
                     END IF;
                 END $$;
             """))
+            # findings: block update of raw_ai_text (while allowing is_stale updates)
+            conn.execute(text("""
+                CREATE OR REPLACE FUNCTION block_findings_raw_ai_text_update()
+                RETURNS trigger AS $$
+                BEGIN
+                    IF OLD.raw_ai_text IS DISTINCT FROM NEW.raw_ai_text THEN
+                        RAISE EXCEPTION 'findings raw_ai_text is immutable: UPDATE is not permitted';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+            """))
+            conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_findings_raw_text_no_update') THEN
+                        CREATE TRIGGER trg_findings_raw_text_no_update
+                        BEFORE UPDATE ON findings
+                        FOR EACH ROW EXECUTE FUNCTION block_findings_raw_ai_text_update();
+                    END IF;
+                END $$;
+            """))
             conn.commit()
     else:
         # Unsupported dialect or in-memory mock: skip gracefully

@@ -40,7 +40,9 @@ def approve_mock_credit(
         finding_id=payload.finding_id,
         actor=user.identity,
         resolution_option_id=payload.resolution_option_id,
+        requested_amount_cents=payload.requested_amount_cents,
         reason_note=payload.reason_note,
+        client_idempotency_key=payload.idempotency_key,
     )
 
 
@@ -60,7 +62,9 @@ def approve_case_credit(
         finding_id=payload.finding_id,
         actor=user.identity,
         resolution_option_id=payload.resolution_option_id,
+        requested_amount_cents=payload.requested_amount_cents,
         reason_note=payload.reason_note,
+        client_idempotency_key=payload.idempotency_key,
     )
 
 

@@ -39,11 +39,19 @@ app = FastAPI(
 )
 
 # CORS configuration
-origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
+configured_origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
+if not configured_origins or configured_origins == ["*"]:
+    # Fallback to local Vite dev/preview origins when unspecified, avoiding illegal wildcard + credentials combo
+    origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]
+    allow_credentials = True
+else:
+    origins = configured_origins
+    allow_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins or ["*"],
-    allow_credentials=True,
+    allow_origins=origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

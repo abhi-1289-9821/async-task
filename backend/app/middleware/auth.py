@@ -47,17 +47,21 @@ def get_current_user(
 
     token = credentials.credentials
 
-    # Check reviewer token with constant-time comparison
-    if secrets.compare_digest(token, settings.demo_reviewer_token):
-        custom_id = request.headers.get("x-reviewer-identity") or request.headers.get("x-reviewer-email")
-        identity = custom_id.strip() if custom_id else "reviewer@acmebilling.com"
-        return AuthUser(identity=identity, role="REVIEWER")
+    # Check multi-user reviewer tokens registry
+    if settings.reviewer_tokens:
+        for entry in settings.reviewer_tokens.split(","):
+            if ":" in entry:
+                tok, ident = entry.split(":", 1)
+                if secrets.compare_digest(token, tok.strip()):
+                    return AuthUser(identity=ident.strip(), role="REVIEWER")
 
-    # Check viewer token with constant-time comparison
+    # Check primary reviewer token with constant-time comparison (identity derived from token)
+    if secrets.compare_digest(token, settings.demo_reviewer_token):
+        return AuthUser(identity="reviewer@acmebilling.com", role="REVIEWER")
+
+    # Check viewer token with constant-time comparison (identity derived from token)
     if secrets.compare_digest(token, settings.demo_viewer_token):
-        custom_id = request.headers.get("x-viewer-identity") or request.headers.get("x-viewer-email")
-        identity = custom_id.strip() if custom_id else "viewer@acmebilling.com"
-        return AuthUser(identity=identity, role="VIEWER")
+        return AuthUser(identity="viewer@acmebilling.com", role="VIEWER")
 
     # Invalid token
     raise HTTPException(

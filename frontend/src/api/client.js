@@ -7,13 +7,14 @@
 
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
-// Default demo tokens matching local backend .env and config.
-// In deployed environments, override via localStorage ('billing_reviewer_token')
-// or by setting VITE_DEMO_REVIEWER_TOKEN / VITE_DEMO_VIEWER_TOKEN at build time.
-export const DEMO_TOKENS = {
-  REVIEWER: import.meta.env?.VITE_DEMO_REVIEWER_TOKEN || localStorage.getItem('billing_reviewer_token') || 'demo-reviewer-token-change-me',
-  VIEWER: import.meta.env?.VITE_DEMO_VIEWER_TOKEN || localStorage.getItem('billing_viewer_token') || 'demo-viewer-token-change-me',
-};
+// Tokens are strictly user-supplied or loaded from session/localStorage.
+// No secret tokens are baked into the production bundle.
+export function getToken(role = currentRole) {
+  if (role === 'REVIEWER') {
+    return localStorage.getItem('billing_reviewer_token') || sessionStorage.getItem('billing_reviewer_token') || '';
+  }
+  return localStorage.getItem('billing_viewer_token') || sessionStorage.getItem('billing_viewer_token') || '';
+}
 
 let currentRole = 'REVIEWER';
 
@@ -29,26 +30,25 @@ export function setActiveRole(role) {
 }
 
 export function setCustomToken(role, token) {
+  const cleanToken = (token || '').trim();
   if (role === 'REVIEWER') {
-    localStorage.setItem('billing_reviewer_token', token);
-    DEMO_TOKENS.REVIEWER = token;
+    localStorage.setItem('billing_reviewer_token', cleanToken);
   } else if (role === 'VIEWER') {
-    localStorage.setItem('billing_viewer_token', token);
-    DEMO_TOKENS.VIEWER = token;
+    localStorage.setItem('billing_viewer_token', cleanToken);
   }
 }
 
-// Initialize from storage if present
+// Initialize role from storage if present
 const savedRole = localStorage.getItem('billing_demo_role');
 if (savedRole === 'REVIEWER' || savedRole === 'VIEWER') {
   currentRole = savedRole;
 }
 
 async function request(endpoint, options = {}) {
-  const token = DEMO_TOKENS[currentRole] || DEMO_TOKENS.REVIEWER;
+  const token = getToken(currentRole);
   const headers = {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${token}`,
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...options.headers,
   };
 

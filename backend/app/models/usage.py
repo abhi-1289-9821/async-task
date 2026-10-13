@@ -16,6 +16,7 @@ from typing import Optional
 from sqlalchemy import (
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     Numeric,
     String,
@@ -31,6 +32,7 @@ from app.database import Base
 class UsageEvent(Base):
     """
     One usage measurement for a case.
+    Primary key is scoped to (case_id, id) so multiple cases can use 'ev-1' without collision.
 
     quantity: stored as Numeric(20,6) to preserve Decimal precision.
     environment: "production", "staging", etc. — compared against rule's exempt_environments.
@@ -38,14 +40,19 @@ class UsageEvent(Base):
     quarantine_reason: why it was rejected.
     """
     __tablename__ = "usage_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["case_id", "line_id"],
+            ["invoice_lines.case_id", "invoice_lines.id"],
+            ondelete="CASCADE",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     case_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True
+        String(36), ForeignKey("cases.id", ondelete="CASCADE"), primary_key=True, index=True
     )
-    line_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("invoice_lines.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    line_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     quantity: Mapped[float] = mapped_column(Numeric(20, 6), nullable=False)
     environment: Mapped[str] = mapped_column(String(50), nullable=False)
     event_timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

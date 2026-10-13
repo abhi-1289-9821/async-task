@@ -51,9 +51,6 @@ Thumbs.db
 *.log
 logs/
 
-# ── Alembic auto-generated ────────────────────────────────────────────────────
-backend/migrations/versions/*.py
-
 # ── Private Notes & Audit ─────────────────────────────────────────────────────
 INTERVIEW_PREP.md
 PROJECT_AUDIT.md

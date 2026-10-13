@@ -305,6 +305,76 @@ class TestEvidenceUploadAndStaleness:
         assert res.status_code == 200
         assert res.json()["case_status"] == "REOPENED"
 
+    def test_multiple_cases_can_share_line_and_rule_and_event_ids(self, client_and_session):
+        """Verifies that line-1, rule-1, and ev-1 are scoped per case and do not collide globally."""
+        client, _ = client_and_session
+
+        # Create First Case with line-1, rule-1
+        res1 = client.post(
+            "/api/cases",
+            headers=REVIEWER_HEADERS,
+            json={
+                "id": "case-tenant-alpha",
+                "title": "Alpha Case",
+                "customer_name": "Alpha Corp",
+                "disputed_amount_cents": 1000,
+                "invoice_lines": [{"id": "line-1", "description": "API Calls", "original_amount_cents": 1000}],
+                "contract_rules": [{"id": "rule-1", "line_id": "line-1", "rule_type": "PER_UNIT", "rate_cents": 10}],
+            },
+        )
+        assert res1.status_code == 201
+
+        # Upload ev-1 to First Case
+        res_ev1 = client.post(
+            "/api/cases/case-tenant-alpha/evidence",
+            headers=REVIEWER_HEADERS,
+            json={
+                "events": [
+                    {
+                        "event_id": "ev-1",
+                        "line_id": "line-1",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "quantity": 100.0,
+                        "environment": "production",
+                    }
+                ]
+            },
+        )
+        assert res_ev1.status_code == 200
+
+        # Create Second Case with identical line-1 and rule-1! Must succeed (no 409 conflict).
+        res2 = client.post(
+            "/api/cases",
+            headers=REVIEWER_HEADERS,
+            json={
+                "id": "case-tenant-beta",
+                "title": "Beta Case",
+                "customer_name": "Beta Corp",
+                "disputed_amount_cents": 2000,
+                "invoice_lines": [{"id": "line-1", "description": "API Calls Beta", "original_amount_cents": 2000}],
+                "contract_rules": [{"id": "rule-1", "line_id": "line-1", "rule_type": "PER_UNIT", "rate_cents": 20}],
+            },
+        )
+        assert res2.status_code == 201
+
+        # Upload ev-1 to Second Case! Must succeed (no 409 conflict).
+        res_ev2 = client.post(
+            "/api/cases/case-tenant-beta/evidence",
+            headers=REVIEWER_HEADERS,
+            json={
+                "events": [
+                    {
+                        "event_id": "ev-1",
+                        "line_id": "line-1",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "quantity": 200.0,
+                        "environment": "production",
+                    }
+                ]
+            },
+        )
+        assert res_ev2.status_code == 200
+
 
 class TestFindingReviews:
     def test_finding_review_accept_edit_reject(self, client_and_session):
@@ -500,6 +570,8 @@ class TestCreditApprovalAndConcurrencyCap:
                 calculation_line_result_id=clr.id,
                 finding_type="CONFIRMED_CALCULATION_DISCREPANCY",
                 raw_ai_text="Eligible for refund",
+                citation_validation_passed=True,
+                consistency_check_passed=True,
                 is_stale=False,
             )
             db.add_all([run, finding])

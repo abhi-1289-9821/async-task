@@ -47,6 +47,7 @@ def create_case(
         evidence_version=1,
     )
     db.add(case)
+    db.flush()
 
     # Add invoice lines
     for line in payload.invoice_lines:
@@ -57,6 +58,7 @@ def create_case(
             original_amount_cents=line.original_amount_cents,
         )
         db.add(db_line)
+    db.flush()
 
     # Add contract rules
     for rule in payload.contract_rules:
@@ -75,12 +77,14 @@ def create_case(
             exempt_environments=rule.exempt_environments,
         )
         db.add(db_rule)
+    db.flush()
 
     # Add prior adjustments
     for adj in payload.adjustments:
         db_adj = Adjustment(
             id=adj.id,
             case_id=case_id,
+            invoice_line_id=adj.invoice_line_id,
             amount_cents=adj.amount_cents,
             description=adj.description,
             applied_at=adj.applied_at,
@@ -107,7 +111,7 @@ def create_case(
         db.rollback()
         raise HTTPException(
             status_code=409,
-            detail=f"Integrity conflict or duplicate primary key: {e}",
+            detail="Integrity conflict or duplicate primary key in dispute case creation",
         )
     db.refresh(case)
     return case

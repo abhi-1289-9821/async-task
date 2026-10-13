@@ -36,19 +36,31 @@ def _mock_analysis(prompt: str, state: dict[str, Any]) -> dict[str, Any]:
     calc_status = state.get("calculation_status", "OK")
 
     # Check for discrepancy, ambiguity, or missing data
-    primary_lr = line_results[0] if line_results else {}
+    ambiguous_lrs = [lr for lr in line_results if lr.get("finding_type") == "AMBIGUOUS"]
+    insufficient_lrs = [lr for lr in line_results if lr.get("finding_type") == "INSUFFICIENT_DATA"]
+    overcharged = [lr for lr in line_results if lr.get("difference_cents", 0) < 0]
+
+    primary_lr = (
+        ambiguous_lrs[0] if ambiguous_lrs else (
+            insufficient_lrs[0] if insufficient_lrs else (
+                overcharged[0] if overcharged else (line_results[0] if line_results else {})
+            )
+        )
+    )
     citation_id = primary_lr.get("result_id", "res_unknown")
     lr_db_id = primary_lr.get("id")
 
     if calc_status == "AMBIGUOUS":
+        target_amb = ambiguous_lrs[0] if ambiguous_lrs else primary_lr
+        c_ids = [lr.get("result_id") for lr in ambiguous_lrs if lr.get("result_id")] or [citation_id]
         return {
             "finding_type": "CONTRACT_AMBIGUITY",
             "summary_narrative": (
-                "The contract terms allow multiple valid pricing interpretations for this line item. "
+                f"The contract terms on line '{target_amb.get('line_id')}' allow multiple valid pricing interpretations. "
                 "The deterministic engine identified competing interpretations (graduated vs volume tiers)."
             ),
             "verified_facts": [
-                f"Line item '{primary_lr.get('line_id')}' was billed {primary_lr.get('original_amount_cents')}¢.",
+                f"Line item '{target_amb.get('line_id')}' was billed {target_amb.get('original_amount_cents')}¢.",
                 "Contract rule contains ambiguous tier boundaries.",
             ],
             "possible_explanations": [
@@ -63,15 +75,17 @@ def _mock_analysis(prompt: str, state: dict[str, Any]) -> dict[str, Any]:
             "missing_evidence_questions": [
                 "Order form amendment detailing tier calculation method.",
             ],
-            "citation_ids": [citation_id],
-            "calculation_line_result_id": lr_db_id,
+            "citation_ids": c_ids,
+            "calculation_line_result_id": target_amb.get("id"),
         }
 
     if calc_status == "INSUFFICIENT_DATA":
+        target_ins = insufficient_lrs[0] if insufficient_lrs else primary_lr
+        c_ids = [lr.get("result_id") for lr in insufficient_lrs if lr.get("result_id")] or [citation_id]
         return {
             "finding_type": "INSUFFICIENT_EVIDENCE",
             "summary_narrative": (
-                "Insufficient evidence available to complete recalculation. "
+                f"Insufficient evidence available to complete recalculation on line '{target_ins.get('line_id')}'. "
                 f"Engine reported: {state.get('calculation_status_reason', 'Missing usage data or contract rules')}."
             ),
             "verified_facts": [
@@ -87,12 +101,11 @@ def _mock_analysis(prompt: str, state: dict[str, Any]) -> dict[str, Any]:
             "missing_evidence_questions": [
                 "Complete usage event logs for the disputed period.",
             ],
-            "citation_ids": [citation_id] if citation_id != "res_unknown" else [],
-            "calculation_line_result_id": lr_db_id,
+            "citation_ids": c_ids,
+            "calculation_line_result_id": target_ins.get("id"),
         }
 
     # Check for overcharge in line results
-    overcharged = [lr for lr in line_results if lr.get("difference_cents", 0) < 0]
     if overcharged:
         target = overcharged[0]
         diff_cents = target.get("difference_cents", 0)
@@ -269,10 +282,7 @@ def generate_investigation_findings(state: dict[str, Any]) -> tuple[dict[str, An
         return data, {"prompt_tokens": 120, "completion_tokens": 85, "total_tokens": 205}
 
     if not settings.gemini_api_key:
-        logger.warning("GEMINI_API_KEY is not set while LLM_MODE=real; falling back to deterministic mock")
-        data = _mock_analysis(prompt, state)
-        data["generation_path"] = "fallback_mock"
-        return data, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        raise RuntimeError("GEMINI_API_KEY is not configured while LLM_MODE=real; refusing to fabricate mock findings in live mode")
 
     try:
         raw_text, tokens = call_llm(prompt, FINDING_ANALYSIS_SYSTEM_INSTRUCTION)
@@ -281,11 +291,8 @@ def generate_investigation_findings(state: dict[str, Any]) -> tuple[dict[str, An
         parsed["generation_path"] = "llm"
         return parsed, tokens
     except Exception as e:
-        logger.error("Error in real LLM findings call, falling back to deterministic mock: %s", e)
-        # Graceful fallback to deterministic mock so system remains resilient
-        mock_data = _mock_analysis(prompt, state)
-        mock_data["generation_path"] = "fallback_mock"
-        return mock_data, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        logger.error("Error in real LLM findings call: %s", e)
+        raise RuntimeError(f"Live Gemini LLM call failed: {e}; refusing to fake AI analysis")
 
 
 def generate_resolution_options(
@@ -299,8 +306,11 @@ def generate_resolution_options(
         line_results=state.get("line_results", []),
     )
 
-    if settings.llm_mode == "mock" or not settings.gemini_api_key:
+    if settings.llm_mode == "mock":
         return _mock_options(prompt, finding, state), {"prompt_tokens": 80, "completion_tokens": 45, "total_tokens": 125}
+
+    if not settings.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY is not configured while LLM_MODE=real; refusing to fabricate mock options in live mode")
 
     try:
         raw_text, tokens = call_llm(prompt, RESOLUTION_OPTIONS_SYSTEM_INSTRUCTION)
@@ -312,6 +322,5 @@ def generate_resolution_options(
             parsed = [parsed]
         return parsed, tokens
     except Exception as e:
-        logger.error("Error in real LLM options call, falling back to deterministic mock: %s", e)
-        mock_opts = _mock_options(prompt, finding, state)
-        return mock_opts, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        logger.error("Error in real LLM options call: %s", e)
+        raise RuntimeError(f"Live Gemini LLM options call failed: {e}; refusing to fake AI options")

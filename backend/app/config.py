@@ -29,11 +29,12 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.0-flash"  # Verified Gemini model
     llm_mode: str = "real"                  # "mock" for automated tests; "real" for live
 
-    # ── Auth (demo only) ──────────────────────────────────────────────────────
     # Two tokens map to REVIEWER and VIEWER roles.
     # In production, default tokens are strictly disallowed by validator below.
     demo_reviewer_token: str = "demo-reviewer-token-change-me"
     demo_viewer_token: str = "demo-viewer-token-change-me"
+    # Optional multi-user tokens: "token_alice:alice@acmebilling.com,token_bob:bob@acmebilling.com"
+    reviewer_tokens: str = ""
 
     # ── App ───────────────────────────────────────────────────────────────────
     debug: bool = False

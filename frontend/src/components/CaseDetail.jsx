@@ -613,6 +613,32 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
               </div>
             </div>
 
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '1rem', marginBottom: '1.25rem' }}>
+              <div>
+                <label className="form-label">Credit Reason Code</label>
+                <select
+                  className="form-select"
+                  value={creditReason}
+                  onChange={(e) => setCreditReason(e.target.value)}
+                >
+                  <option value="RATE_CALCULATION_ERROR">RATE_CALCULATION_ERROR</option>
+                  <option value="TIER_MISMATCH">TIER_MISMATCH</option>
+                  <option value="EXEMPT_ENVIRONMENT_BILLED">EXEMPT_ENVIRONMENT_BILLED</option>
+                  <option value="GOODWILL_ADJUSTMENT">GOODWILL_ADJUSTMENT</option>
+                </select>
+              </div>
+              <div>
+                <label className="form-label">Reviewer Reason Note</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={creditNote}
+                  onChange={(e) => setCreditNote(e.target.value)}
+                  placeholder="Audit reason note..."
+                />
+              </div>
+            </div>
+
             <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
               <button
                 type="button"

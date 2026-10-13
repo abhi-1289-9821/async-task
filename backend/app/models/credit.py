@@ -21,6 +21,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     String,
     Text,
@@ -53,15 +54,18 @@ class Credit(Base):
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_credits_idempotency_key"),
         CheckConstraint("amount_cents > 0", name="check_credit_amount_positive"),
+        ForeignKeyConstraint(
+            ["case_id", "invoice_line_id"],
+            ["invoice_lines.case_id", "invoice_lines.id"],
+            ondelete="CASCADE",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     case_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    invoice_line_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("invoice_lines.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    invoice_line_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     resolution_option_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("resolution_options.id", ondelete="SET NULL"), nullable=True
     )
@@ -85,15 +89,23 @@ class Adjustment(Base):
     A prior credit/discount applied by the account team before this dispute.
     Used to compute the cumulative credit cap per invoice line or case-wide.
     Cannot be created by the billing agent.
+    Primary key is scoped to (case_id, id).
     """
     __tablename__ = "adjustments"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["case_id", "invoice_line_id"],
+            ["invoice_lines.case_id", "invoice_lines.id"],
+            ondelete="SET NULL",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     case_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True
+        String(36), ForeignKey("cases.id", ondelete="CASCADE"), primary_key=True, index=True
     )
     invoice_line_id: Mapped[Optional[str]] = mapped_column(
-        String(36), ForeignKey("invoice_lines.id", ondelete="SET NULL"), nullable=True, index=True
+        String(36), nullable=True, index=True
     )
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)

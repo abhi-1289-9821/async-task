@@ -40,11 +40,12 @@ def generate_idempotency_key(
     invoice_line_id: str,
     reason_code: str,
     custom_key: Optional[str] = None,
+    finding_id: Optional[str] = None,
 ) -> str:
     """Computes SHA-256 idempotency key or returns client-provided key."""
     if custom_key:
         return custom_key
-    payload = f"{case_id}:{invoice_line_id}:{reason_code}"
+    payload = f"{case_id}:{invoice_line_id}:{finding_id or ''}:{reason_code}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -111,7 +112,7 @@ def approve_credit(
 
     # ── 2. Idempotency Check ────────────────────────────────────────────────────
     idempotency_key = generate_idempotency_key(
-        case_id, invoice_line_id, reason_code, client_idempotency_key
+        case_id, invoice_line_id, reason_code, client_idempotency_key, finding_id
     )
     existing_credit = db.query(Credit).filter(Credit.idempotency_key == idempotency_key).first()
     if existing_credit:
@@ -134,16 +135,6 @@ def approve_credit(
             detail="Finding is stale due to new evidence. Rerun investigation before approving credit.",
         )
 
-    # Invariant: Only confirmed calculation discrepancies can receive credit approvals
-    if finding.finding_type != "CONFIRMED_CALCULATION_DISCREPANCY":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Credit approval requires finding type CONFIRMED_CALCULATION_DISCREPANCY, "
-                f"but finding is '{finding.finding_type}'"
-            ),
-        )
-
     # Check that the LATEST human review is ACCEPT (prevent ACCEPT-then-REJECT payment bug)
     latest_review = (
         db.query(FindingReview)
@@ -157,6 +148,29 @@ def approve_credit(
             detail=(
                 f"Credit approval requires an accepted human finding review "
                 f"(latest review action must be 'ACCEPT', but was '{latest_review.action if latest_review else 'NONE'}')"
+            ),
+        )
+
+    # Invariant: AI verification checks must pass
+    if finding.citation_validation_passed is False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Credit approval requires finding with valid citations (citation_validation_passed=False)",
+        )
+
+    if finding.consistency_check_passed is False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Credit approval requires finding that passed consistency check (consistency_check_passed=False)",
+        )
+
+    # Invariant: Only confirmed calculation discrepancies can receive credit approvals
+    if finding.finding_type != "CONFIRMED_CALCULATION_DISCREPANCY":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Credit approval requires finding type CONFIRMED_CALCULATION_DISCREPANCY, "
+                f"but finding is '{finding.finding_type}'"
             ),
         )
 
@@ -215,24 +229,54 @@ def approve_credit(
         .scalar()
     )
 
-    # Prior adjustments for this line (either explicitly linked to this line, or case-wide)
+    # 1. Prior adjustments specifically linked to this line
     line_adjustments = (
         db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
         .filter(
             Adjustment.case_id == case_id,
-            (Adjustment.invoice_line_id == invoice_line_id) | (Adjustment.invoice_line_id.is_(None)),
+            Adjustment.invoice_line_id == invoice_line_id,
+        )
+        .scalar()
+    )
+    line_cap = eligible_overcharge - prior_credits - line_adjustments
+
+    # 2. Case-wide adjustments (unlinked to any line): apply globally once across the dispute
+    case_wide_adjustments = (
+        db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
+        .filter(
+            Adjustment.case_id == case_id,
+            Adjustment.invoice_line_id.is_(None),
         )
         .scalar()
     )
 
-    remaining_cap = eligible_overcharge - prior_credits - line_adjustments
+    if case_wide_adjustments > 0:
+        all_case_credits = (
+            db.query(func.coalesce(func.sum(Credit.amount_cents), 0))
+            .filter(Credit.case_id == case_id)
+            .scalar()
+        )
+        total_case_overcharge = (
+            db.query(func.coalesce(func.sum(func.abs(CalculationLineResult.difference_cents)), 0))
+            .filter(
+                CalculationLineResult.case_id == case_id,
+                CalculationLineResult.difference_cents < 0,
+            )
+            .scalar()
+        )
+        case_cap = total_case_overcharge - all_case_credits - case_wide_adjustments
+        remaining_cap = min(line_cap, case_cap)
+    else:
+        remaining_cap = line_cap
+
     if remaining_cap <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"Cumulative credit cap reached for line '{invoice_line_id}'. "
-                f"Eligible overcharge: {eligible_overcharge}¢, Prior credits: {prior_credits}¢, "
-                f"Adjustments: {line_adjustments}¢. Remaining cap: {remaining_cap}¢."
+                f"Eligible overcharge: {eligible_overcharge}¢, Prior line credits: {prior_credits}¢, "
+                f"Line adjustments: {line_adjustments}¢, Case adjustments: {case_wide_adjustments}¢. "
+                f"Remaining allowable cap: {remaining_cap}¢."
             ),
         )
 

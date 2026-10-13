@@ -101,6 +101,8 @@ def _run_concurrency_cap_assertion(SessionLocal, case_id: str, line_id: str, fin
             calculation_line_result_id=clr.id,
             finding_type="CONFIRMED_CALCULATION_DISCREPANCY",
             raw_ai_text="Overcharge eligible for credit",
+            citation_validation_passed=True,
+            consistency_check_passed=True,
             is_stale=False,
         )
         db.add_all([run, finding])

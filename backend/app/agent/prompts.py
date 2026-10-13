@@ -92,7 +92,9 @@ def build_analysis_prompt(
         for l in invoice_lines
     )
     rules_str = "\n".join(
-        f"- Rule ID: {r.get('id')}, Line: {r.get('line_id')}, Type: {r.get('rule_type')}, Rate: {r.get('rate_cents')}¢, Commit: {r.get('minimum_commit_cents')}¢, Exempt: {r.get('exempt_environments')}"
+        f"- Rule ID: {r.get('id')}, Line: {r.get('line_id')}, Type: {r.get('rule_type')}, Rate: {r.get('rate_cents')}¢, "
+        f"Tiers: {r.get('tiers')}, Discount: {r.get('discount_pct')}%, Included Units: {r.get('included_units')}, "
+        f"Commit: {r.get('minimum_commit_cents')}¢, Exempt: {r.get('exempt_environments')}"
         for r in contract_rules
     )
     results_str = "\n".join(

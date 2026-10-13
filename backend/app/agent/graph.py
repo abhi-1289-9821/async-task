@@ -77,7 +77,7 @@ class InvestigationWorkflow:
     # ── Routing ───────────────────────────────────────────────────────────────
     @staticmethod
     def route_after_evidence(state: AgentState) -> str:
-        if state.get("status") == "BLOCKED":
+        if state.get("status") in ("BLOCKED", "FAILED"):
             return "blocked"
         return "continue"
 
@@ -136,6 +136,10 @@ class InvestigationWorkflow:
                     "line_id": r.line_id,
                     "rule_type": r.rule_type.value,
                     "rate_cents": r.rate_cents,
+                    "tiers": r.tiers,
+                    "discount_pct": float(r.discount_pct) if r.discount_pct is not None else None,
+                    "included_units": r.included_units,
+                    "overage_rate_cents": r.overage_rate_cents,
                     "minimum_commit_cents": r.minimum_commit_cents,
                     "exempt_environments": r.exempt_environments,
                 }
@@ -309,8 +313,8 @@ class InvestigationWorkflow:
         )
         self.db.add(db_run)
 
-        # If BLOCKED or DISCARDED, do NOT create active findings
-        if status_val in ("BLOCKED", "DISCARDED"):
+        # If BLOCKED, DISCARDED, or FAILED, do NOT create active findings
+        if status_val in ("BLOCKED", "DISCARDED", "FAILED"):
             audit_event = CaseEvent(
                 case_id=state["case_id"],
                 event_type=f"INVESTIGATION_RUN_{status_val}",
@@ -412,7 +416,25 @@ def run_investigation(
     }
 
     workflow = InvestigationWorkflow(db)
-    workflow.graph.invoke(initial_state)
+    try:
+        workflow.graph.invoke(initial_state)
+    except Exception as e:
+        logger.error("Investigation workflow failed: %s", e)
+        db.rollback()
+        # Persist a FAILED InvestigationRun so audit trail accurately reflects failure
+        failed_run = db.query(InvestigationRun).filter(InvestigationRun.id == run_id).one_or_none()
+        if not failed_run:
+            failed_run = InvestigationRun(
+                id=run_id,
+                case_id=case_id,
+                status=RunStatus.FAILED,
+                status_reason=str(e),
+                evidence_version=evidence_version,
+                completed_at=datetime.now(timezone.utc),
+            )
+            db.add(failed_run)
+            db.commit()
+        return failed_run
 
     # Return refreshed InvestigationRun
     db_run = db.query(InvestigationRun).filter(InvestigationRun.id == run_id).one()

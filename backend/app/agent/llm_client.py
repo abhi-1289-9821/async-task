@@ -263,18 +263,28 @@ def generate_investigation_findings(state: dict[str, Any]) -> tuple[dict[str, An
         line_results=state.get("line_results", []),
     )
 
-    if settings.llm_mode == "mock" or not settings.gemini_api_key:
-        return _mock_analysis(prompt, state), {"prompt_tokens": 120, "completion_tokens": 85, "total_tokens": 205}
+    if settings.llm_mode == "mock":
+        data = _mock_analysis(prompt, state)
+        data["generation_path"] = "mock"
+        return data, {"prompt_tokens": 120, "completion_tokens": 85, "total_tokens": 205}
+
+    if not settings.gemini_api_key:
+        logger.warning("GEMINI_API_KEY is not set while LLM_MODE=real; falling back to deterministic mock")
+        data = _mock_analysis(prompt, state)
+        data["generation_path"] = "fallback_mock"
+        return data, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     try:
         raw_text, tokens = call_llm(prompt, FINDING_ANALYSIS_SYSTEM_INSTRUCTION)
         cleaned = _clean_json_markdown(raw_text)
         parsed = json.loads(cleaned)
+        parsed["generation_path"] = "llm"
         return parsed, tokens
     except Exception as e:
         logger.error("Error in real LLM findings call, falling back to deterministic mock: %s", e)
         # Graceful fallback to deterministic mock so system remains resilient
         mock_data = _mock_analysis(prompt, state)
+        mock_data["generation_path"] = "fallback_mock"
         return mock_data, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 

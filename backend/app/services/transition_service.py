@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.models.case import Case, CaseEvent, CaseStatus, VALID_TRANSITIONS
 from app.models.investigation import Finding, ResolutionOption
+from app.models.invoice import InvoiceLine
 from app.models.usage import UsageEvent, EvidenceVersion
 from app.schemas.evidence import UsageEventIn, EvidenceUploadResponse
 
@@ -90,6 +91,23 @@ def add_evidence_and_bump_version(
     Adds new usage events for a case, increments the evidence version,
     marks existing findings as stale, and transitions to REOPENED if arriving from RESOLVED.
     """
+    # 1. Validate line_id against case invoice lines
+    valid_line_ids = {l.id for l in db.query(InvoiceLine).filter(InvoiceLine.case_id == case.id).all()}
+    for ev in events_in:
+        if ev.line_id not in valid_line_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Usage event '{ev.event_id}' line_id '{ev.line_id}' is not associated with case '{case.id}'",
+            )
+
+    # 2. Acquire lock on case row to prevent race conditions during version bump
+    try:
+        locked_case = db.query(Case).filter(Case.id == case.id).with_for_update().first()
+        if locked_case:
+            case = locked_case
+    except Exception:
+        pass
+
     old_status = case.status
     case.evidence_version += 1
 
@@ -112,7 +130,6 @@ def add_evidence_and_bump_version(
         ResolutionOption.is_stale == False,  # noqa: E712
     ).update({"is_stale": True})
 
-
     # Insert usage event rows
     new_db_events: list[UsageEvent] = []
     for ev in events_in:
@@ -127,13 +144,27 @@ def add_evidence_and_bump_version(
         new_db_events.append(db_ev)
     db.add_all(new_db_events)
 
-
-    # Compute content hash of newly added events
+    # Compute content hash of all inputs (lines, rules, and events) for this case
+    existing_events = db.query(UsageEvent).filter(UsageEvent.case_id == case.id).all()
+    all_events_combined = existing_events + new_db_events
     serialized_events = sorted(
-        [{"id": e.event_id, "qty": str(e.quantity), "env": e.environment} for e in events_in],
+        [{"id": e.id, "qty": str(e.quantity), "env": e.environment} for e in all_events_combined],
         key=lambda x: x["id"],
     )
-    content_hash = hashlib.sha256(json.dumps(serialized_events, sort_keys=True).encode()).hexdigest()
+    serialized_lines = sorted(
+        [{"id": l.id, "desc": l.description, "amt": l.original_amount_cents} for l in case.invoice_lines],
+        key=lambda x: x["id"],
+    )
+    serialized_rules = sorted(
+        [{"id": r.id, "type": str(r.rule_type), "rate": r.rate_cents, "tiers": r.tiers} for r in case.contract_rules],
+        key=lambda x: x["id"],
+    )
+    payload = {
+        "lines": serialized_lines,
+        "rules": serialized_rules,
+        "events": serialized_events,
+    }
+    content_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
     # Record EvidenceVersion snapshot
     evidence_ver_record = EvidenceVersion(
@@ -143,7 +174,6 @@ def add_evidence_and_bump_version(
         created_by=actor,
     )
     db.add(evidence_ver_record)
-
 
     # Append-only audit event
     audit_event = CaseEvent(
@@ -162,7 +192,14 @@ def add_evidence_and_bump_version(
     )
     db.add(audit_event)
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Duplicate event_id or database conflict during evidence upload: {e}",
+        )
     db.refresh(case)
 
     return EvidenceUploadResponse(

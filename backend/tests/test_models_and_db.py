@@ -274,3 +274,101 @@ class TestDatabaseSchemaAndConstraints:
         assert len(fetched.tiers) == 3
         assert fetched.tiers[0]["up_to"] == 100
         assert fetched.exempt_environments == ["staging", "qa", "dev"]
+
+    def test_credit_amount_positive_check_constraint(self, db_session):
+        """Credit amount_cents must be > 0 by CheckConstraint."""
+        case = Case(
+            id="case-c-chk",
+            title="Dispute",
+            customer_name="Corp",
+            disputed_amount_cents=5000,
+            status=CaseStatus.OPEN,
+            evidence_version=1,
+        )
+        line = InvoiceLine(
+            id="line-c-chk",
+            case_id="case-c-chk",
+            description="API",
+            original_amount_cents=5000,
+        )
+        db_session.add_all([case, line])
+        db_session.commit()
+
+        bad_credit = Credit(
+            id="c-bad",
+            case_id="case-c-chk",
+            invoice_line_id="line-c-chk",
+            idempotency_key="key-bad",
+            amount_cents=0,  # Fails amount_cents > 0
+            reason_code="OVERCHARGE",
+            approved_by="reviewer",
+        )
+        db_session.add(bad_credit)
+        with pytest.raises(IntegrityError):
+            db_session.commit()
+        db_session.rollback()
+
+    def test_credits_and_reviews_append_only_triggers(self, db_session):
+        """credits and finding_reviews must block UPDATE and DELETE via triggers."""
+        case = Case(
+            id="case-trg",
+            title="Dispute",
+            customer_name="Corp",
+            disputed_amount_cents=5000,
+            status=CaseStatus.OPEN,
+            evidence_version=1,
+        )
+        line = InvoiceLine(
+            id="line-trg",
+            case_id="case-trg",
+            description="API",
+            original_amount_cents=5000,
+        )
+        db_session.add_all([case, line])
+        db_session.commit()
+
+        credit = Credit(
+            id="c-ok",
+            case_id="case-trg",
+            invoice_line_id="line-trg",
+            idempotency_key="key-ok",
+            amount_cents=500,
+            reason_code="OVERCHARGE",
+            approved_by="reviewer",
+        )
+        db_session.add(credit)
+        db_session.commit()
+
+        # Update credit must fail via trigger
+        with pytest.raises(IntegrityError, match="credits is append-only: UPDATE is not permitted"):
+            db_session.execute(text("UPDATE credits SET amount_cents = 999 WHERE id = 'c-ok'"))
+            db_session.commit()
+        db_session.rollback()
+
+        # Delete credit must fail via trigger
+        with pytest.raises(IntegrityError, match="credits is append-only: DELETE is not permitted"):
+            db_session.execute(text("DELETE FROM credits WHERE id = 'c-ok'"))
+            db_session.commit()
+        db_session.rollback()
+
+    def test_evidence_version_unique_constraint(self, db_session):
+        """EvidenceVersion enforces unique (case_id, version_number)."""
+        from app.models.usage import EvidenceVersion
+        case = Case(
+            id="case-ev-uq",
+            title="Dispute",
+            customer_name="Corp",
+            disputed_amount_cents=5000,
+            status=CaseStatus.OPEN,
+            evidence_version=1,
+        )
+        v1 = EvidenceVersion(case_id="case-ev-uq", version_number=1, content_hash="hash1", created_by="admin")
+        v2 = EvidenceVersion(case_id="case-ev-uq", version_number=1, content_hash="hash2", created_by="admin")
+        db_session.add_all([case, v1])
+        db_session.commit()
+
+        db_session.add(v2)
+        with pytest.raises(IntegrityError):
+            db_session.commit()
+        db_session.rollback()
+

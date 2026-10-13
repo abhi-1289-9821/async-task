@@ -60,13 +60,14 @@ def create_case(
 
     # Add contract rules
     for rule in payload.contract_rules:
+        tiers_data = [t.model_dump() for t in rule.tiers] if rule.tiers else None
         db_rule = ContractRule(
             id=rule.id,
             case_id=case_id,
             line_id=rule.line_id,
             rule_type=rule.rule_type,
             rate_cents=rule.rate_cents,
-            tiers=rule.tiers,
+            tiers=tiers_data,
             discount_pct=rule.discount_pct,
             minimum_commit_cents=rule.minimum_commit_cents,
             included_units=rule.included_units,
@@ -100,7 +101,14 @@ def create_case(
     )
     db.add(event)
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"Integrity conflict or duplicate primary key: {e}",
+        )
     db.refresh(case)
     return case
 

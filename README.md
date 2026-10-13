@@ -19,12 +19,13 @@ A full-stack AI-assisted application designed to investigate, recalculate, and r
   - [5. Human-in-the-Loop Finding Review](#5-human-in-the-loop-finding-review)
   - [6. Concurrency-Safe Idempotent Credit Approval](#6-concurrency-safe-idempotent-credit-approval)
   - [7. Bearer Token Auth & Roles](#7-bearer-token-auth--roles)
-- [Planned Features (Phase 3 & Phase 4)](#-planned-features-phase-3--phase-4)
+  - [8. Agentic Investigation Workflow (Phase 3)](#8-agentic-investigation-workflow-phase-3)
+  - [9. Frontend Audit Workspace (Phase 4)](#9-frontend-audit-workspace-phase-4)
 - [Excluded Scope](#-excluded-scope)
 - [Known Limitations](#-known-limitations)
 - [API Routes](#-api-routes)
 - [Deployment](#-deployment)
-- [Test Suite & Verification (84 Passing Tests)](#-test-suite--verification-84-passing-tests)
+- [Test Suite & Verification (98 Passing Tests)](#-test-suite--verification-98-passing-tests)
 - [Quickstart & Local Setup](#-quickstart--local-setup)
 - [Implementation Roadmap](#-implementation-roadmap)
 - [Documentation & Engineering Logs](#-documentation--engineering-logs)
@@ -38,7 +39,7 @@ In SaaS and metered cloud infrastructure billing, disputes regularly occur when 
 ### Why Separate Calculation From Generative AI?
 LLMs are probabilistic models prone to numerical errors and rounding inconsistencies when evaluating pricing tiers or calculating discounts. This architecture enforces a clear boundary:
 - **Financial Calculation (Deterministic Engine):** Executed purely in Python using `Decimal`, integer cents, and explicit `ROUND_HALF_UP` rounding. The LLM does not calculate billing figures.
-- **Investigation & Narration (Planned - Phase 3):** An agentic workflow synthesizes narrative findings and drafts correspondence, citing cryptographic calculation result anchors (`result_id`).
+- **Investigation & Narration (Implemented - Phase 3):** An agentic workflow synthesizes narrative findings and drafts correspondence, citing cryptographic calculation result anchors (`result_id`).
 - **Human Governance:** Financial credit issuance requires human reviewer approval.
 
 ---
@@ -55,7 +56,7 @@ LLMs are probabilistic models prone to numerical errors and rounding inconsisten
          ▼                                             ▼                                             ▼
 ┌─────────────────────────────────┐       ┌─────────────────────────────────┐       ┌─────────────────────────────────┐
 │     Deterministic Engine        │       │      Agentic Investigation      │       │     Credit Approval Service     │
-│         [IMPLEMENTED]           │       │      (Planned - Phase 3)        │       │          [IMPLEMENTED]          │
+│         [IMPLEMENTED]           │       │          [IMPLEMENTED]          │       │          [IMPLEMENTED]          │
 │  - Integer cents arithmetic     │       │  - LangGraph state graph        │       │  - Row-level lock concurrency   │
 │  - Graduated vs Volume tiers    │       │  - Gemini API integration       │       │  - Cumulative credit cap check  │
 │  - Included units & overage     │       │  - Result ID citation check     │       │  - SHA-256 idempotency key      │
@@ -141,10 +142,18 @@ Implemented in [`backend/app/middleware/auth.py`](backend/app/middleware/auth.py
 
 ---
 
-## ⏳ Planned Features (Phase 3 & Phase 4)
+### 8. Agentic Investigation Workflow (Phase 3)
+Implemented in [`backend/app/agent/`](backend/app/agent/):
+- **LangGraph StateGraph:** Multi-node execution pipeline (`gather_evidence` -> `run_calculation` -> `analyze_findings` -> `formulate_options` -> `validate_and_sanitize` -> `persist_results`).
+- **Prompt Injection Defense:** Untrusted dispute inputs wrapped in strict XML tags (`<untrusted_customer_dispute>`) with escaped delimiters. Customer name and dispute metadata isolated from system prompt instructions.
+- **Citation & Consistency Validation:** Pydantic schema validation (`LLMFindingPayload`), verification that cited line result IDs exist in calculation output, narrative financial figure consistency checks, and rejection of hallucinated credit amounts.
+- **Dual-Mode AI Engine:** `LLM_MODE=mock` for deterministic test automation; `LLM_MODE=real` with Gemini API integration. Graceful error handling transitions to `PARTIAL` status upon external AI failures while preserving deterministic engine math.
 
-- **Frontend Workspace (Planned - Phase 4):** React / Vite UI with timeline views, discrepancy diffing, and reviewer approval controls.
-- **Integration Scenario Suite (Planned - Phase 5):** 6 end-to-end scenarios (overcharges, volume slabs, staging exemptions, prompt injection defense, concurrency tests).
+### 9. Frontend Audit Workspace (Phase 4)
+Implemented in [`frontend/`](frontend/):
+- Modern dark-mode Single Page Application built with React 19, Vite, and custom CSS design tokens.
+- Interactive dispute workspace featuring deterministic recalculation explorer, LangGraph AI investigation runner, human review modal (`ACCEPT`, `EDIT`, `REJECT`), and credit approval panel.
+- Demonstration presets for instant reproducible testing of multi-tier discrepancies, ambiguous contract rules, clean calculations, and prompt injection defense.
 
 ---
 
@@ -195,7 +204,7 @@ To maintain project focus and feasibility, the following areas are explicitly ou
 
 ---
 
-## 🧪 Test Suite & Verification (84 Passing Tests)
+## 🧪 Test Suite & Verification (98 Passing Tests, 1 Skipped)
 
 The test suite runs under `pytest`:
 
@@ -204,40 +213,42 @@ pytest -v
 ```
 
 ### Breakdown of Test Results:
-- **Pricing & Calculation Logic (53 tests in [`backend/tests/test_billing_engine.py`](backend/tests/test_billing_engine.py)):**
+- **Pricing & Calculation Logic (58 tests in [`backend/tests/test_billing_engine.py`](backend/tests/test_billing_engine.py)):**
   - Boundary rounding (`ROUND_HALF_UP`, half-away-from-zero).
   - Flat, per-unit, tiered graduated, and tiered volume calculations.
   - Included units with overage rate application.
-  - Discounts and minimum spend commit floors.
+  - Discounts and minimum spend commit floors applied to all interpretations.
+  - Detection of uncovered usage when volume/graduated exceed last bounded tier (`INSUFFICIENT_DATA`).
+  - Detection of multiple competing primary rules yielding `AMBIGUOUS` with 0 difference.
   - Environment exemptions and zero-billing verification.
   - Quarantine of negative usage quantities.
-  - Dual interpretation generation for unspecified tier types.
-  - Repeatability and determinism of cryptographic `result_id` anchors.
-- **Schema & Triggers (7 tests in [`backend/tests/test_models_and_db.py`](backend/tests/test_models_and_db.py)):**
+  - Repeatability and determinism of cryptographic `result_id` anchors and `result_hash` covering all pricing inputs.
+- **Schema & Triggers (9 tests in [`backend/tests/test_models_and_db.py`](backend/tests/test_models_and_db.py)):**
   - Table creation verification for all 14 models.
   - Foreign key constraint rejection on SQLite.
-  - Append-only trigger verification blocking `UPDATE` on `case_events`.
-  - Append-only trigger verification blocking `DELETE` on `case_events`.
-  - Append-only trigger verification blocking modifications on `calculation_line_results`.
-  - Unique constraint enforcement on `Credit.idempotency_key`.
+  - Dialect-aware append-only triggers blocking `UPDATE` and `DELETE` on `case_events`, `calculation_line_results`, `credits`, `finding_reviews`, `evidence_versions`, and preserving `findings.raw_ai_text`.
+  - Dialect-aware trigger generation for SQLite (`RAISE(ABORT)`) and PostgreSQL (`PL/pgSQL`).
+  - Credit positive amount `CheckConstraint` (`amount_cents > 0`).
+  - Unique constraint enforcement on `Credit.idempotency_key` and `EvidenceVersion(case_id, version_number)`.
   - JSON serialization of contract tiers and exemption lists.
-- **FastAPI Backend & Services (16 tests in [`backend/tests/test_api_and_services.py`](backend/tests/test_api_and_services.py)):**
-  - Auth enforcement: Bearer token validation, 401 on missing/invalid token, 403 on viewer mutating actions.
-  - Startup security: Refuses to boot in production when default demo tokens are present.
+- **FastAPI Backend & Services (21 tests in [`backend/tests/test_api_and_services.py`](backend/tests/test_api_and_services.py)):**
+  - Auth enforcement: Bearer token validation with `secrets.compare_digest`, 401 on missing/invalid token, 403 on viewer mutating actions.
+  - Startup security: Refuses to boot in production when default demo tokens are present or when `LLM_MODE=mock`.
+  - Path traversal defense: SPA catch-all verifies realpath containment against `frontend/dist`.
   - State machine lifecycle transitions and 409 Conflict rejection on invalid paths.
   - Evidence upload bumping version from 1 to 2, marking findings stale, and reopening resolved cases.
   - Finding review workflows: `ACCEPT`, `EDIT` (with separate text), and `REJECT`.
   - End-to-end calculation execution via API with line-item results.
-  - Credit approval: stale finding rejection (400), unreviewed finding rejection (400), line item mismatch rejection (400), idempotency 409 Conflict on repeat, and cumulative cap exhaustion (400).
-- **LangGraph Agentic Investigation (9 tests in [`backend/tests/test_agent.py`](backend/tests/test_agent.py)):**
+  - Credit approval: stale finding rejection (400), unreviewed finding rejection (400), line item mismatch rejection (400), ambiguous finding rejection (400), latest-review ordering (preventing ACCEPT-then-REJECT payment), idempotency 409 Conflict on repeat, and cumulative cap exhaustion (400).
+- **LangGraph Agentic Investigation (10 tests in [`backend/tests/test_agent.py`](backend/tests/test_agent.py)):**
   - Autonomous multi-node graph: gather evidence, deterministic calculation, findings synthesis, resolution formulation.
-  - Injection defense with `<untrusted_customer_dispute>` isolation tags.
-  - Citation validation verifying all cited IDs exist in calculation results.
-  - Consistency check detecting contradictions between deterministic math and LLM narrative.
+  - Injection defense with escaped `<untrusted_customer_dispute>` isolation tags and untrusted metadata wrapping.
+  - Pydantic schema validation (`LLMFindingPayload`), citation verification, and narrative financial amount consistency checks.
+  - Graceful fallback: LLM transient failures yield `PARTIAL` status with fallback attribution.
 - **Concurrency Stress Test (1 test in [`backend/tests/test_concurrency.py`](backend/tests/test_concurrency.py)):**
   - Fires 10 concurrent threads simultaneously against a single overcharge line item.
   - Proves that exactly 1 thread claims the credit, 9 competing threads are rejected, and total approved credits strictly equals the eligible overcharge (zero double-crediting).
-  - PostgreSQL `SELECT FOR UPDATE` verification configured via `POSTGRES_TEST_URL`.
+  - PostgreSQL `SELECT FOR UPDATE` verification configured via `POSTGRES_TEST_URL` (conditionally skipped pending live PG connection).
 
 ---
 
@@ -300,7 +311,7 @@ npm run dev
 - [x] **Phase 1: Deterministic Engine & Core Schema** (60 passing tests)
 - [x] **Phase 3: Agentic Investigation (LangGraph + Gemini)** (86 passing tests, citation & injection defense)
 - [x] **Phase 4: Frontend Audit Workspace (React + Vite)** (Dark mode UI, scenario presets, interactive review)
-- [ ] **Phase 5: End-to-End Scenarios & Demonstration Workflows**
+- [x] **Phase 5: End-to-End Scenarios & Demonstration Workflows** (98 passing tests, live API & UI verification)
 
 ---
 

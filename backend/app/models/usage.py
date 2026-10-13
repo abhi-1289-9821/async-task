@@ -20,6 +20,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -38,7 +39,7 @@ class UsageEvent(Base):
     """
     __tablename__ = "usage_events"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
     case_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -66,6 +67,9 @@ class EvidenceVersion(Base):
     created_by: actor who triggered this version bump.
     """
     __tablename__ = "evidence_versions"
+    __table_args__ = (
+        UniqueConstraint("case_id", "version_number", name="uq_evidence_versions_case_version"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     case_id: Mapped[str] = mapped_column(

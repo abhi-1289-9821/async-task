@@ -91,44 +91,146 @@ def create_all_tables():
 
 def install_append_only_triggers(target_engine=None):
     """
-    Install DB-level triggers that block UPDATE and DELETE on audit tables:
+    Install DB-level triggers that block UPDATE and DELETE on audit and immutable tables:
       - case_events (audit trail)
       - calculation_line_results (immutable billing calculation output)
-    This enforces the append-only invariant at the database layer, not just at the ORM layer.
-
-    SQLite: uses BEFORE UPDATE / BEFORE DELETE triggers with RAISE(ABORT, ...).
-    PostgreSQL: triggers are added in Alembic migrations.
+      - credits (approved credits)
+      - finding_reviews (human reviewer decisions)
+      - evidence_versions (evidence snapshots)
+      - findings (original AI text is immutable; DELETE blocked)
+    Enforces the append-only / immutable invariant at the database layer.
     """
     target = target_engine or engine
-    # In SQLite, install the triggers
-    with target.connect() as conn:
-        conn.execute(text("""
-            CREATE TRIGGER IF NOT EXISTS trg_case_events_no_update
-            BEFORE UPDATE ON case_events
-            BEGIN
-                SELECT RAISE(ABORT, 'case_events is append-only: UPDATE is not permitted');
-            END;
-        """))
-        conn.execute(text("""
-            CREATE TRIGGER IF NOT EXISTS trg_case_events_no_delete
-            BEFORE DELETE ON case_events
-            BEGIN
-                SELECT RAISE(ABORT, 'case_events is append-only: DELETE is not permitted');
-            END;
-        """))
-        conn.execute(text("""
-            CREATE TRIGGER IF NOT EXISTS trg_calc_results_no_update
-            BEFORE UPDATE ON calculation_line_results
-            BEGIN
-                SELECT RAISE(ABORT, 'calculation_line_results is append-only: UPDATE is not permitted');
-            END;
-        """))
-        conn.execute(text("""
-            CREATE TRIGGER IF NOT EXISTS trg_calc_results_no_delete
-            BEFORE DELETE ON calculation_line_results
-            BEGIN
-                SELECT RAISE(ABORT, 'calculation_line_results is append-only: DELETE is not permitted');
-            END;
-        """))
-        conn.commit()
+    dialect = target.dialect.name
+
+    if dialect == "sqlite":
+        with target.connect() as conn:
+            # case_events
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_case_events_no_update
+                BEFORE UPDATE ON case_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'case_events is append-only: UPDATE is not permitted');
+                END;
+            """))
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_case_events_no_delete
+                BEFORE DELETE ON case_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'case_events is append-only: DELETE is not permitted');
+                END;
+            """))
+            # calculation_line_results
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_calc_results_no_update
+                BEFORE UPDATE ON calculation_line_results
+                BEGIN
+                    SELECT RAISE(ABORT, 'calculation_line_results is append-only: UPDATE is not permitted');
+                END;
+            """))
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_calc_results_no_delete
+                BEFORE DELETE ON calculation_line_results
+                BEGIN
+                    SELECT RAISE(ABORT, 'calculation_line_results is append-only: DELETE is not permitted');
+                END;
+            """))
+            # credits
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_credits_no_update
+                BEFORE UPDATE ON credits
+                BEGIN
+                    SELECT RAISE(ABORT, 'credits is append-only: UPDATE is not permitted');
+                END;
+            """))
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_credits_no_delete
+                BEFORE DELETE ON credits
+                BEGIN
+                    SELECT RAISE(ABORT, 'credits is append-only: DELETE is not permitted');
+                END;
+            """))
+            # finding_reviews
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_finding_reviews_no_update
+                BEFORE UPDATE ON finding_reviews
+                BEGIN
+                    SELECT RAISE(ABORT, 'finding_reviews is append-only: UPDATE is not permitted');
+                END;
+            """))
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_finding_reviews_no_delete
+                BEFORE DELETE ON finding_reviews
+                BEGIN
+                    SELECT RAISE(ABORT, 'finding_reviews is append-only: DELETE is not permitted');
+                END;
+            """))
+            # findings (block DELETE; block raw_ai_text UPDATE)
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_findings_no_delete
+                BEFORE DELETE ON findings
+                BEGIN
+                    SELECT RAISE(ABORT, 'findings is append-only: DELETE is not permitted');
+                END;
+            """))
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_findings_raw_text_no_update
+                BEFORE UPDATE OF raw_ai_text ON findings
+                BEGIN
+                    SELECT RAISE(ABORT, 'findings raw_ai_text is immutable: UPDATE is not permitted');
+                END;
+            """))
+            # evidence_versions
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_evidence_versions_no_update
+                BEFORE UPDATE ON evidence_versions
+                BEGIN
+                    SELECT RAISE(ABORT, 'evidence_versions is append-only: UPDATE is not permitted');
+                END;
+            """))
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS trg_evidence_versions_no_delete
+                BEFORE DELETE ON evidence_versions
+                BEGIN
+                    SELECT RAISE(ABORT, 'evidence_versions is append-only: DELETE is not permitted');
+                END;
+            """))
+            conn.commit()
+
+    elif dialect == "postgresql":
+        with target.connect() as conn:
+            conn.execute(text("""
+                CREATE OR REPLACE FUNCTION block_append_only_modification()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION '% is immutable / append-only: modification is not permitted', TG_TABLE_NAME;
+                END;
+                $$ LANGUAGE plpgsql;
+            """))
+            for tbl in ["case_events", "calculation_line_results", "credits", "finding_reviews", "evidence_versions"]:
+                conn.execute(text(f"""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_{tbl}_append_only') THEN
+                            CREATE TRIGGER trg_{tbl}_append_only
+                            BEFORE UPDATE OR DELETE ON {tbl}
+                            FOR EACH ROW EXECUTE FUNCTION block_append_only_modification();
+                        END IF;
+                    END $$;
+                """))
+            # findings: block delete
+            conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_findings_no_delete') THEN
+                        CREATE TRIGGER trg_findings_no_delete
+                        BEFORE DELETE ON findings
+                        FOR EACH ROW EXECUTE FUNCTION block_append_only_modification();
+                    END IF;
+                END $$;
+            """))
+            conn.commit()
+    else:
+        # Unsupported dialect or in-memory mock: skip gracefully
+        pass
 

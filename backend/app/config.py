@@ -60,6 +60,14 @@ class Settings(BaseSettings):
                     "When ENVIRONMENT=production, DEMO_REVIEWER_TOKEN and DEMO_VIEWER_TOKEN must be "
                     "explicitly set to non-default secure values."
                 )
+            if self.llm_mode.lower() == "mock":
+                raise ValueError(
+                    "Production Security Error: LLM_MODE cannot be 'mock' in production."
+                )
+            if not self.gemini_api_key or self.gemini_api_key in ("your-gemini-api-key-here", "your_gemini_api_key_here"):
+                raise ValueError(
+                    "Production Security Error: GEMINI_API_KEY must be set in production when LLM_MODE=real."
+                )
         return self
 
 

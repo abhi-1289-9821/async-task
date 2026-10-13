@@ -13,8 +13,9 @@ Endpoints can require:
   - require_reviewer: requires role == "REVIEWER"
 """
 
+import secrets
 from typing import Annotated
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
@@ -30,11 +31,12 @@ class AuthUser(BaseModel):
 
 
 def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)]
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
+    request: Request,
 ) -> AuthUser:
     """
-    Validates Bearer token from Authorization header.
-    Returns AuthUser if valid, otherwise raises 401 Unauthorized.
+    Validates Bearer token from Authorization header using constant-time comparison.
+    Returns AuthUser with distinct reviewer identity if provided, otherwise raises 401.
     """
     if credentials is None or not credentials.credentials:
         raise HTTPException(
@@ -45,13 +47,17 @@ def get_current_user(
 
     token = credentials.credentials
 
-    # Check reviewer token
-    if token == settings.demo_reviewer_token:
-        return AuthUser(identity="reviewer@acmebilling.com", role="REVIEWER")
+    # Check reviewer token with constant-time comparison
+    if secrets.compare_digest(token, settings.demo_reviewer_token):
+        custom_id = request.headers.get("x-reviewer-identity") or request.headers.get("x-reviewer-email")
+        identity = custom_id.strip() if custom_id else "reviewer@acmebilling.com"
+        return AuthUser(identity=identity, role="REVIEWER")
 
-    # Check viewer token
-    if token == settings.demo_viewer_token:
-        return AuthUser(identity="viewer@acmebilling.com", role="VIEWER")
+    # Check viewer token with constant-time comparison
+    if secrets.compare_digest(token, settings.demo_viewer_token):
+        custom_id = request.headers.get("x-viewer-identity") or request.headers.get("x-viewer-email")
+        identity = custom_id.strip() if custom_id else "viewer@acmebilling.com"
+        return AuthUser(identity=identity, role="VIEWER")
 
     # Invalid token
     raise HTTPException(

@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
@@ -51,6 +52,7 @@ class Credit(Base):
     __tablename__ = "credits"
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_credits_idempotency_key"),
+        CheckConstraint("amount_cents > 0", name="check_credit_amount_positive"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

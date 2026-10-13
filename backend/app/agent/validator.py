@@ -8,9 +8,64 @@ Rigorous verification layer enforcing:
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
+
+VALID_FINDING_TYPES = {
+    "CONFIRMED_CALCULATION_DISCREPANCY",
+    "POSSIBLE_DISCREPANCY",
+    "CONTRACT_AMBIGUITY",
+    "INSUFFICIENT_EVIDENCE",
+    "NO_DISCREPANCY",
+    "UNRESOLVED",
+}
+
+
+class LLMFindingPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    finding_type: str = "UNRESOLVED"
+    summary_narrative: str = ""
+    calculation_line_result_id: Optional[int] = None
+    citation_ids: list[str] = Field(default_factory=list)
+    verified_facts: list[str] = Field(default_factory=list)
+    possible_explanations: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    missing_evidence_questions: list[str] = Field(default_factory=list)
+
+
+def validate_llm_payload(
+    raw_dict: dict[str, Any],
+    line_results: list[dict[str, Any]],
+) -> tuple[bool, dict[str, Any], list[str]]:
+    """
+    Validates LLM finding JSON against schema, verifies line_result_id against this run,
+    and validates that finding_type is recognized.
+    """
+    errors = []
+    try:
+        model = LLMFindingPayload.model_validate(raw_dict)
+        sanitized = model.model_dump()
+    except Exception as e:
+        return False, {"finding_type": "UNRESOLVED", "summary_narrative": "Schema validation failed"}, [f"LLM JSON schema error: {e}"]
+
+    if sanitized["finding_type"] not in VALID_FINDING_TYPES:
+        errors.append(f"Invalid finding_type '{sanitized['finding_type']}' from LLM; defaulting to UNRESOLVED")
+        sanitized["finding_type"] = "UNRESOLVED"
+
+    # Validate calculation_line_result_id against this run's line results
+    valid_db_ids = {lr.get("id") for lr in line_results if lr.get("id") is not None}
+    if sanitized["calculation_line_result_id"] is not None:
+        if sanitized["calculation_line_result_id"] not in valid_db_ids:
+            errors.append(
+                f"Bogus calculation_line_result_id '{sanitized['calculation_line_result_id']}'; not present in this run"
+            )
+            sanitized["calculation_line_result_id"] = None
+
+    return (len(errors) == 0), sanitized, errors
 
 
 def validate_citations(
@@ -106,6 +161,8 @@ def sanitize_resolution_options(
                     lr.get("difference_cents") if lr else "None",
                 )
                 continue
+        elif lr_id not in line_results_by_id:
+            lr_id = None
 
         sanitized.append({
             "option_type": opt_type,

@@ -134,16 +134,30 @@ def approve_credit(
             detail="Finding is stale due to new evidence. Rerun investigation before approving credit.",
         )
 
-    # Check for an ACCEPTED human review
-    accepted_review = (
-        db.query(FindingReview)
-        .filter(FindingReview.finding_id == finding_id, FindingReview.action == "ACCEPT")
-        .first()
-    )
-    if not accepted_review:
+    # Invariant: Only confirmed calculation discrepancies can receive credit approvals
+    if finding.finding_type != "CONFIRMED_CALCULATION_DISCREPANCY":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Credit approval requires an accepted human finding review (action == 'ACCEPT')",
+            detail=(
+                f"Credit approval requires finding type CONFIRMED_CALCULATION_DISCREPANCY, "
+                f"but finding is '{finding.finding_type}'"
+            ),
+        )
+
+    # Check that the LATEST human review is ACCEPT (prevent ACCEPT-then-REJECT payment bug)
+    latest_review = (
+        db.query(FindingReview)
+        .filter(FindingReview.finding_id == finding_id)
+        .order_by(FindingReview.created_at.desc(), FindingReview.id.desc())
+        .first()
+    )
+    if not latest_review or latest_review.action != "ACCEPT":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Credit approval requires an accepted human finding review "
+                f"(latest review action must be 'ACCEPT', but was '{latest_review.action if latest_review else 'NONE'}')"
+            ),
         )
 
     # ── 4. Calculation Amount & Cumulative Cap ──────────────────────────────────
@@ -162,6 +176,17 @@ def approve_credit(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"CalculationLineResult '{finding.calculation_line_result_id}' not found",
+        )
+
+    # Invariant: Calculation line result must also be CONFIRMED_CALCULATION_DISCREPANCY
+    lr_finding_type = line_result.finding_type.value if hasattr(line_result.finding_type, "value") else str(line_result.finding_type)
+    if lr_finding_type != "CONFIRMED_CALCULATION_DISCREPANCY":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Credit approval requires calculation line result finding type CONFIRMED_CALCULATION_DISCREPANCY, "
+                f"but line result is '{lr_finding_type}'"
+            ),
         )
 
     # Invariant: Line in calculation result must match the requested invoice_line_id

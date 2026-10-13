@@ -63,13 +63,17 @@ def execute_case_calculation(
         # Convert JSON tiers if present
         tiers = None
         if r.tiers:
-            tiers = [
-                engine.TierBand(
-                    price_per_unit_cents=t.get("rate_cents", t.get("price_per_unit_cents", 0)),
+            tiers = []
+            for t in r.tiers:
+                price = t.get("price_per_unit_cents")
+                if price is None:
+                    price = t.get("rate_cents")
+                if price is None:
+                    raise ValueError(f"Tier definition missing price_per_unit_cents or rate_cents: {t}")
+                tiers.append(engine.TierBand(
+                    price_per_unit_cents=price,
                     up_to=t.get("up_to"),
-                )
-                for t in r.tiers
-            ]
+                ))
 
 
         engine_rules.append(
@@ -164,6 +168,13 @@ def execute_case_calculation(
             quarantined_events=quarantined_data,
         )
         db.add(db_lr)
+
+    # Mark quarantined events in database
+    for q in engine_result.quarantined_events:
+        db.query(DBUsageEvent).filter(
+            DBUsageEvent.case_id == case.id,
+            DBUsageEvent.id == q.event_id,
+        ).update({"is_quarantined": 1, "quarantine_reason": q.reason})
 
     # Append-only audit event
     audit_event = CaseEvent(

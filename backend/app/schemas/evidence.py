@@ -13,7 +13,7 @@ class UsageEventIn(BaseModel):
     event_id: str = Field(..., min_length=1, max_length=64)
     line_id: str = Field(..., min_length=1, max_length=36)
     timestamp: datetime
-    quantity: float = Field(...)
+    quantity: float = Field(..., ge=0, allow_inf_nan=False)
     environment: str = Field(default="production", max_length=50)
     raw: Optional[dict[str, Any]] = None
 

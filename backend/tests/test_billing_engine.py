@@ -648,3 +648,83 @@ class TestRunCalculation:
         rule = make_rule(RuleType.FLAT, rate_cents=1000)
         result = run_calculation([line], [rule], [])
         assert result.status == EngineStatus.OK
+
+    def test_unresolvable_line_not_treated_as_full_refund(self):
+        """A line with no rule must not produce a phantom refund equal to -original_amount_cents."""
+        line = InvoiceLine("L1", "Unresolvable Line", original_amount_cents=3000)
+        result = run_calculation([line], [], [])
+        assert result.status == EngineStatus.INSUFFICIENT_DATA
+        assert result.line_results[0].difference_cents == 0
+        assert result.total_difference_cents == 0
+        assert result.total_recalculated_cents == 3000
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Regressions: P0 & P1 Engine Fixes
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEngineRegressions:
+    def test_different_pricing_inputs_produce_different_result_id_and_hash(self):
+        """result_id and result_hash must include rate_cents, tiers, commit, etc."""
+        line = make_line(original_cents=5000)
+        rule_low = make_rule(RuleType.PER_UNIT, rate_cents=10, rule_id="R1")
+        rule_high = make_rule(RuleType.PER_UNIT, rate_cents=999, rule_id="R1")
+        events = [make_event(qty=100)]
+
+        res_low = calculate_line(line, [rule_low], events)
+        res_high = calculate_line(line, [rule_high], events)
+        assert res_low.result_id != res_high.result_id
+
+        calc_low = run_calculation([line], [rule_low], events)
+        calc_high = run_calculation([line], [rule_high], events)
+        assert calc_low.result_hash != calc_high.result_hash
+
+    def test_ambiguity_branch_applies_discount_and_commit_and_zero_difference(self):
+        """Ambiguous line must apply discounts and commits to interpretations, and difference_cents must be 0."""
+        line = make_line(original_cents=1000)
+        tiers = [
+            TierBand(up_to=100, price_per_unit_cents=10),
+            TierBand(up_to=None, price_per_unit_cents=8),
+        ]
+        grad_rule = make_rule(RuleType.TIERED_GRADUATED, tiers=tiers, rule_id="R_GRAD")
+        vol_rule = make_rule(RuleType.TIERED_VOLUME, tiers=tiers, rule_id="R_VOL")
+        disc_rule = make_rule(RuleType.DISCOUNT_PCT, discount_pct=Decimal("50"), rule_id="R_DISC")
+        commit_rule = make_rule(RuleType.MINIMUM_COMMIT, minimum_commit_cents=100000, rule_id="R_COMMIT")
+
+        events = [make_event(qty=150)]
+        result = calculate_line(line, [grad_rule, vol_rule, disc_rule, commit_rule], events)
+
+        assert result.finding_type == FindingType.AMBIGUOUS
+        assert result.difference_cents == 0  # Ambiguous lines do not carry non-zero difference
+        # Minimum commit of 100000 cents applies to both interpretations
+        for interp in result.interpretations:
+            assert interp.recalculated_amount_cents == 100000
+
+    def test_uncovered_usage_in_bounded_tiers_returns_insufficient_data(self):
+        """Usage exceeding the highest bounded tier without an unbounded bracket must return INSUFFICIENT_DATA."""
+        line = make_line(original_cents=5000)
+        bounded_tiers = [
+            TierBand(up_to=100, price_per_unit_cents=10),
+            TierBand(up_to=200, price_per_unit_cents=8),
+        ]
+        grad_rule = make_rule(RuleType.TIERED_GRADUATED, tiers=bounded_tiers, rule_id="R_GRAD")
+        events = [make_event(qty=250)]  # Exceeds 200
+
+        res_grad = calculate_line(line, [grad_rule], events)
+        assert res_grad.finding_type == FindingType.INSUFFICIENT_DATA
+        assert "exceeds" in res_grad.explanation.lower()
+
+        vol_rule = make_rule(RuleType.TIERED_VOLUME, tiers=bounded_tiers, rule_id="R_VOL")
+        res_vol = calculate_line(line, [vol_rule], events)
+        assert res_vol.finding_type == FindingType.INSUFFICIENT_DATA
+
+    def test_multiple_conflicting_primary_rules_returns_ambiguous(self):
+        """Two primary rules of non-tier types must not silently ignore one by list order."""
+        line = make_line(original_cents=5000)
+        rule1 = make_rule(RuleType.FLAT, rate_cents=50, rule_id="R_FLAT_50")
+        rule2 = make_rule(RuleType.FLAT, rate_cents=99999, rule_id="R_FLAT_99999")
+
+        res = calculate_line(line, [rule1, rule2], [])
+        assert res.finding_type == FindingType.AMBIGUOUS
+        assert "conflicting primary" in res.explanation.lower()
+

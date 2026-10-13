@@ -8,9 +8,12 @@ Enforces deterministic gates:
 - Citations and amounts are strictly verified against calculation line results.
 """
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
@@ -143,7 +146,12 @@ class InvestigationWorkflow:
                 for e in events
             ],
             "adjustments": [
-                {"id": a.id, "amount_cents": a.amount_cents, "reason_code": a.reason_code}
+                {
+                    "id": a.id,
+                    "invoice_line_id": a.invoice_line_id,
+                    "amount_cents": a.amount_cents,
+                    "description": a.description,
+                }
                 for a in adjustments
             ],
         }
@@ -191,9 +199,11 @@ class InvestigationWorkflow:
         for k, v in tokens.items():
             token_usage[k] = token_usage.get(k, 0) + v
 
+        llm_fallback = (finding_dict.get("generation_path") == "fallback_mock")
         return {
             "raw_findings": [finding_dict],
             "token_usage": token_usage,
+            "llm_fallback": llm_fallback,
         }
 
     def formulate_options_node(self, state: AgentState) -> dict[str, Any]:
@@ -212,7 +222,7 @@ class InvestigationWorkflow:
         }
 
     def validate_and_sanitize_node(self, state: AgentState) -> dict[str, Any]:
-        """Applies citation validation, consistency checks, and option sanitization."""
+        """Applies schema validation, citation validation, consistency checks, and option sanitization."""
         raw_findings = state.get("raw_findings", [])
         valid_result_ids = state.get("valid_result_ids", [])
         calc_status = state.get("calculation_status", "OK")
@@ -221,13 +231,16 @@ class InvestigationWorkflow:
 
         validated_findings = []
         for rf in raw_findings:
+            # 0. Validate raw LLM JSON schema & line result ID against this run
+            payload_passed, sanitized_rf, p_errs = validator.validate_llm_payload(rf, line_results)
+
             # 1. Validate citations
             citation_passed, sanitized_citations, c_errs = validator.validate_citations(
-                rf, valid_result_ids
+                sanitized_rf, valid_result_ids
             )
             # 2. Consistency check
             consist_passed, final_finding_type, con_errs = validator.validate_consistency(
-                rf, calc_status, total_diff, line_results
+                sanitized_rf, calc_status, total_diff, line_results
             )
 
             # 3. Narrative monetary check: catch hallucinated or unanchored dollar amounts
@@ -237,13 +250,14 @@ class InvestigationWorkflow:
                 "total_difference_cents": total_diff,
             }
             narrative_passed, nar_errs = validator.validate_narrative_amounts(
-                rf, line_results, summary_calc
+                sanitized_rf, line_results, summary_calc
             )
-            if not narrative_passed:
+            if not narrative_passed or not payload_passed:
                 consist_passed = False
-                logger.warning("Narrative dollar amount validation failed: %s", nar_errs)
+                final_finding_type = "UNRESOLVED"
+                logger.warning("Validation failed: narrative=%s, payload=%s", nar_errs, p_errs)
 
-            f_copy = dict(rf)
+            f_copy = dict(sanitized_rf)
             f_copy["citation_ids"] = sanitized_citations
             f_copy["citation_validation_passed"] = citation_passed
             f_copy["consistency_check_passed"] = consist_passed
@@ -254,16 +268,33 @@ class InvestigationWorkflow:
         raw_options = state.get("raw_options", [])
         validated_options = validator.sanitize_resolution_options(raw_options, line_results)
 
+        # 5. Status: if LLM fallback occurred, mark as PARTIAL
+        status_val = "COMPLETED"
+        status_reason = None
+        if state.get("llm_fallback"):
+            status_val = "PARTIAL"
+            status_reason = "LLM analysis failed or unconfigured; deterministic fallback applied"
+
         return {
             "validated_findings": validated_findings,
             "validated_options": validated_options,
-            "status": "COMPLETED",
+            "status": status_val,
+            "status_reason": status_reason,
         }
 
     def persist_results_node(self, state: AgentState) -> dict[str, Any]:
         """Persists the InvestigationRun, Findings, and ResolutionOptions to DB."""
         run_id = state["run_id"]
         status_val = state.get("status", "COMPLETED")
+
+        # Check if newer evidence arrived while this investigation was in flight
+        current_case = self.db.query(Case).filter(Case.id == state["case_id"]).first()
+        is_stale_run = bool(
+            current_case is not None and current_case.evidence_version > state.get("evidence_version", 1)
+        )
+        if is_stale_run:
+            status_val = "DISCARDED"
+            state["status_reason"] = "Investigation superseded by newer evidence uploaded concurrently"
 
         # 1. InvestigationRun record
         db_run = InvestigationRun(
@@ -278,11 +309,11 @@ class InvestigationWorkflow:
         )
         self.db.add(db_run)
 
-        # If BLOCKED, do NOT create findings
-        if status_val == "BLOCKED":
+        # If BLOCKED or DISCARDED, do NOT create active findings
+        if status_val in ("BLOCKED", "DISCARDED"):
             audit_event = CaseEvent(
                 case_id=state["case_id"],
-                event_type="INVESTIGATION_RUN_BLOCKED",
+                event_type=f"INVESTIGATION_RUN_{status_val}",
                 actor=state["actor"],
                 details={
                     "run_id": run_id,
@@ -293,7 +324,7 @@ class InvestigationWorkflow:
             )
             self.db.add(audit_event)
             self.db.commit()
-            return {"status": "BLOCKED"}
+            return {"status": status_val}
 
         # 2. Persist Findings
         db_findings = []

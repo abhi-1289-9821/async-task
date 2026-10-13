@@ -142,8 +142,34 @@ Each entry: Phase, timestamp, category, event, fix, status.
 - **Transaction Exception Handling**: Replaced generic `except (OperationalError, Exception): pass` on SQLite `BEGIN IMMEDIATE;` with specific check for `"cannot start a transaction within a transaction"`, preventing silent masking of real database lock errors.
 - **Production Startup Security**: Added Pydantic `@model_validator` in `config.py` that halts application startup with a fatal `ValueError` if `ENVIRONMENT=production` runs with default guessable demo tokens.
 - **Full-Stack SPA Serving**: Configured `main.py` to automatically detect and serve `frontend/dist` on `/assets` and SPA index routing, enabling unified single-service deployments on Render.
-- **Postgres Concurrency Verification**: Implemented full assertion helper in `test_concurrency.py` for live PostgreSQL `SELECT FOR UPDATE` verification via `POSTGRES_TEST_URL`.
-- **Outcome**: All 86 tests pass (1 skipped for live Postgres). Clean production build and zero dependency conflicts.
+- **Postgres Concurrency Verification Status**: Concurrency lock assertion helper is fully implemented and tested with 10 threads on SQLite. For PostgreSQL (`SELECT FOR UPDATE`), the test function `test_postgres_concurrency_locking` is configured to run against `POSTGRES_TEST_URL` and is conditionally skipped in local environments when no live PostgreSQL URL is configured.
+- **Outcome**: 86 tests pass (1 skipped for live Postgres). Clean production build and zero dependency conflicts.
+- **Status**: resolved (SQLite concurrency verified; PostgreSQL test stub ready for live Neon connection)
+
+---
+
+## Phase 5: Comprehensive Security, Financial Integrity & Hardening Audit
+
+### [Phase 5] [2026-10-13 16:30] — P0 Financial Math, Security & Crash Fixes
+- **SPA Path Traversal Defense**: Enforced `os.path.realpath` containment check in `main.py` SPA catch-all route, preventing `/../../backend/...` directory traversal attacks.
+- **Credit Approval Gates for Ambiguous Findings**: Enforced `finding.finding_type == CONFIRMED_CALCULATION_DISCREPANCY` and `line_result.finding_type == CONFIRMED_CALCULATION_DISCREPANCY` in `credit_service.py`. Enforced `difference_cents = 0` on ambiguous lines in `billing_engine.py`.
+- **Review Ordering Invariant (ACCEPT-then-REJECT)**: Updated `credit_service.py` to evaluate the latest human review on the finding instead of any historical review, preventing credits from being approved on findings subsequently rejected.
+- **Investigation Crash on Prior Adjustments**: Fixed `graph.py` crash by replacing non-existent `a.reason_code` with `a.description` and `a.invoice_line_id`.
+- **Deterministic Engine Unresolvable Lines**: Fixed total calculation discrepancy math in `billing_engine.py` by summing individual line item differences (`total_difference = sum(r.difference_cents ...)` and `total_recalculated = total_original + total_difference`), eliminating phantom full refunds on unresolvable lines.
+- **Silent Under-Billing Prevention**: Added uncovered usage detection in volume and graduated pricing when usage exceeds the highest bounded tier without an unbounded bracket, returning `INSUFFICIENT_DATA`. Replaced untyped tier dictionaries with typed `TierBandSchema` enforcing ascending order and non-negative rates.
+- **Ambiguity Branch Discount & Commit Application**: In `billing_engine.py`, both concrete tier interpretations now evaluate line-level discounts and minimum spend commitments before presenting comparison values.
+- **Dialect-Aware Append-Only Triggers**: Added PostgreSQL PL/pgSQL function `block_append_only_modification()` alongside SQLite `RAISE(ABORT)` triggers in `database.py`, preventing startup DDL failures on PostgreSQL while enforcing immutability across `case_events`, `calculation_line_results`, `credits`, `finding_reviews`, `evidence_versions`, and `findings.raw_ai_text`.
+- **Status**: resolved
+
+### [Phase 5] [2026-10-13 16:45] — P1 Trust, Integrity & Model Limits
+- **Cryptographic Pricing Input Hashing**: Updated `_compute_result_id` and `_compute_input_hash` to include rates, tiers, discounts, commitments, included units, exemptions, and original amounts, guaranteeing unique result IDs across varying pricing inputs.
+- **LLM Fallback Transparency**: Added `produced_by` provenance tracking on findings (`llm_gemini` vs `llm_fallback`), and set investigation run status to `PARTIAL` whenever the LLM fallback is engaged. Production mode rejects empty keys and `LLM_MODE=mock`.
+- **Strict LLM Output Validation**: Added `LLMFindingPayload` Pydantic model validating LLM JSON structures, verifying cited line result IDs against current engine results, rejecting unanchored monetary claims in narratives, and validating finding types.
+- **Prompt Injection Defense Hardening**: Escaped closing delimiter tags (`&lt;/untrusted_customer_dispute&gt;`) and wrapped customer metadata in untrusted XML tags (`<untrusted_metadata>`).
+- **Input Validation**: Enforced non-NaN/non-Inf float quantities (`allow_inf_nan=False`), validated `line_id` references against case invoice lines, expanded `event_id` column to `String(64)`, and added 409/422 responses.
+- **Evidence Race Invalidation**: Added `UniqueConstraint("case_id", "version_number")` on `EvidenceVersion` and set in-flight investigation run status to `DISCARDED` if evidence versions change during execution.
+- **Timing-Safe Auth**: Replaced direct token equality checks with `secrets.compare_digest` in `auth.py`.
+- **Outcome**: All 98 unit and regression tests pass cleanly (1 skipped for live Postgres).
 - **Status**: resolved
 
 

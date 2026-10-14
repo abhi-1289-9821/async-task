@@ -19,8 +19,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('contract_rules', sa.Column('is_active', sa.Boolean(), server_default='1', nullable=False))
-    op.add_column('contract_rules', sa.Column('supersedes_rule_id', sa.String(length=36), nullable=True))
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    cols = [c['name'] for c in insp.get_columns('contract_rules')] if insp.has_table('contract_rules') else []
+    if 'is_active' not in cols:
+        op.add_column('contract_rules', sa.Column('is_active', sa.Boolean(), server_default='1', nullable=False))
+    if 'supersedes_rule_id' not in cols:
+        op.add_column('contract_rules', sa.Column('supersedes_rule_id', sa.String(length=36), nullable=True))
 
 
 def downgrade() -> None:

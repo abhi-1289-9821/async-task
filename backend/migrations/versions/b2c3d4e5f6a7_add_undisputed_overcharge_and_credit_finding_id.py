@@ -19,12 +19,22 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    calc_cols = [c['name'] for c in insp.get_columns('calculation_line_results')] if insp.has_table('calculation_line_results') else []
+    credit_cols = [c['name'] for c in insp.get_columns('credits')] if insp.has_table('credits') else []
+
     with op.batch_alter_table('calculation_line_results') as batch_op:
-        batch_op.add_column(sa.Column('undisputed_overcharge_cents', sa.Integer(), nullable=True))
+        if 'undisputed_overcharge_cents' not in calc_cols:
+            batch_op.add_column(sa.Column('undisputed_overcharge_cents', sa.Integer(), nullable=True))
 
     with op.batch_alter_table('credits') as batch_op:
-        batch_op.add_column(sa.Column('finding_id', sa.String(length=36), nullable=True))
-        batch_op.create_unique_constraint('uq_credits_finding_id', ['finding_id'])
+        if 'finding_id' not in credit_cols:
+            batch_op.add_column(sa.Column('finding_id', sa.String(length=36), nullable=True))
+            try:
+                batch_op.create_unique_constraint('uq_credits_finding_id', ['finding_id'])
+            except Exception:
+                pass
 
 
 def downgrade() -> None:

@@ -19,8 +19,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('cases', sa.Column('period_start', sa.DateTime(), nullable=True))
-    op.add_column('cases', sa.Column('period_end', sa.DateTime(), nullable=True))
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    cols = [c['name'] for c in insp.get_columns('cases')] if insp.has_table('cases') else []
+    if 'period_start' not in cols:
+        op.add_column('cases', sa.Column('period_start', sa.DateTime(), nullable=True))
+    if 'period_end' not in cols:
+        op.add_column('cases', sa.Column('period_end', sa.DateTime(), nullable=True))
 
 
 def downgrade() -> None:

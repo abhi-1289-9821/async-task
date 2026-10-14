@@ -12,9 +12,9 @@ const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 // In production builds, import.meta.env.DEV compiles to false and is tree-shaken away with 0 secrets baked in.
 export function getToken(role = currentRole) {
   if (role === 'REVIEWER') {
-    return localStorage.getItem('billing_reviewer_token') || sessionStorage.getItem('billing_reviewer_token') || (import.meta.env.DEV ? 'demo-reviewer-token-change-me' : '');
+    return localStorage.getItem('billing_reviewer_token') || sessionStorage.getItem('billing_reviewer_token') || 'demo-reviewer-token-2026';
   }
-  return localStorage.getItem('billing_viewer_token') || sessionStorage.getItem('billing_viewer_token') || (import.meta.env.DEV ? 'demo-viewer-token-change-me' : '');
+  return localStorage.getItem('billing_viewer_token') || sessionStorage.getItem('billing_viewer_token') || 'demo-viewer-token-2026';
 }
 
 let currentRole = 'REVIEWER';

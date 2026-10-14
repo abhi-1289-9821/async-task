@@ -110,11 +110,27 @@ export default function Navbar({ onSelectCase, activeCaseId }) {
                   onChange={(e) => setTokenInput(e.target.value)}
                 />
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
                 <button
                   type="button"
                   className="btn btn-secondary"
                   style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
+                  onClick={() => setTokenInput('demo-reviewer-token-2026')}
+                >
+                  Fill Demo Reviewer
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}
+                  onClick={() => setTokenInput('demo-viewer-token-2026')}
+                >
+                  Fill Demo Viewer
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', color: '#f87171' }}
                   onClick={() => setTokenInput('')}
                 >
                   Clear Token

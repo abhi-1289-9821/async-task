@@ -38,9 +38,10 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
       .catch(() => setIsHealthy(false));
 
     const handleAuthError = () => {
+      const defaultTok = role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026';
       setAuthRequiredPrompt(true);
       setShowTokenModal(true);
-      setTokenInput(getToken(role));
+      setTokenInput(getToken(role) || defaultTok);
     };
 
     window.addEventListener('authError', handleAuthError);
@@ -83,12 +84,15 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
   };
 
   const openTokenModal = () => {
-    setTokenInput(getToken(role));
+    const defaultTok = role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026';
+    setTokenInput(getToken(role) || defaultTok);
     setShowTokenModal(true);
   };
 
   const handleSaveToken = () => {
-    setCustomToken(role, tokenInput);
+    const defaultTok = role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026';
+    const effectiveToken = (tokenInput || '').trim() || defaultTok;
+    setCustomToken(role, effectiveToken);
     setShowTokenModal(false);
     setAuthRequiredPrompt(false);
     setRole((r) => r);
@@ -230,9 +234,23 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label htmlFor="personal-bearer-token-input" className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>Personal Bearer Token</span>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--accent-cyan)', fontWeight: 500 }}>
-                    Default: {role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026'}
-                  </span>
+                  <button
+                    type="button"
+                    style={{
+                      background: 'rgba(56, 189, 248, 0.12)',
+                      border: '1px solid rgba(56, 189, 248, 0.35)',
+                      borderRadius: '4px',
+                      color: 'var(--accent-cyan)',
+                      fontSize: '0.72rem',
+                      fontWeight: 500,
+                      padding: '0.15rem 0.5rem',
+                      cursor: 'pointer'
+                    }}
+                    onClick={() => setTokenInput(role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026')}
+                    title="Click to insert default demo token"
+                  >
+                    Click to Use Default: {role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026'}
+                  </button>
                 </label>
                 <div style={{ position: 'relative' }}>
                   <input
@@ -275,7 +293,7 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
             </div>
 
             <div className="modal-footer">
-              <div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button
                   type="button"
                   className="btn btn-secondary"
@@ -290,7 +308,23 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
                   disabled={!tokenInput}
                 >
                   <Trash2 size={13} />
-                  <span>Clear Token</span>
+                  <span>Clear</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{
+                    fontSize: '0.8rem',
+                    padding: '0.5rem 0.85rem',
+                    color: 'var(--accent-cyan)',
+                    borderColor: 'rgba(56, 189, 248, 0.3)'
+                  }}
+                  onClick={() => {
+                    const defTok = role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026';
+                    setTokenInput(defTok);
+                  }}
+                >
+                  Fill Default
                 </button>
               </div>
               <div className="modal-footer-end">

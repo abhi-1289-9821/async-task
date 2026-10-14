@@ -30,16 +30,17 @@ export default function App() {
   };
 
   useEffect(() => {
-    let ignore = false;
-    getCases()
-      .then((data) => {
-        if (!ignore) setCases(data);
-      })
-      .catch((err) => {
-        if (!ignore) addToast('error', err.message || 'Failed to load dispute cases');
-      });
+    loadCases();
+
+    const handleAuthChange = () => {
+      loadCases();
+    };
+
+    window.addEventListener('tokenChanged', handleAuthChange);
+    window.addEventListener('roleChanged', handleAuthChange);
     return () => {
-      ignore = true;
+      window.removeEventListener('tokenChanged', handleAuthChange);
+      window.removeEventListener('roleChanged', handleAuthChange);
     };
   }, []);
 

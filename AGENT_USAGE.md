@@ -44,6 +44,9 @@ Development proceeded across six major phases driven by strict architectural and
 ### Phase 5 & Regressions: Financial Integrity & Security Hardening
 > *"Fix regressions: add invoice_line_id to AdjustmentCreate; join Calculation to compute case-wide cap from latest calculation without AttributeError; rewrite Alembic migration from empty database; remove reason_code from credit idempotency key to prevent double-crediting via reason switching; record INVESTIGATION_RUN_FAILED on run failure and return HTTP 200; add dispute_description to case creation and UI."*
 
+### Phase 6: Multi-Provider LLM Resilience & Free-Tier Quota Fallback
+> *"Make the live LLM call resilient to free-tier quota limits by trying providers in this order: Gemini (primary) -> Groq -> OpenRouter. Never fabricate or mock output when LLM_MODE=real. Implement providers.py (GeminiProvider, OpenAICompatProvider via httpx), ordered fallback on 429/5xx/timeout with 1s retry, immediate skip on 401/403/404, 40s deadline, fail-loud 502 with run id and reason on total failure, trace provider/model in token_usage and UI badge, structured JSON logging without secrets, GET /api/llm/status, and backend/scripts/check_llm.py."*
+
 ---
 
 ## 3. Delegated Agent Workflows
@@ -123,6 +126,10 @@ Transparency regarding AI mistakes and human corrections is an essential require
 - **Mistake**: Failed agent runs did not write an audit event, the endpoint returned HTTP 201, and the README documented an obsolete `PARTIAL` mock fallback.
 - **Correction**: On failure, `graph.py` writes a `CaseEvent` of type `INVESTIGATION_RUN_FAILED`, the router returns HTTP 200 with `status="FAILED"`, and the README was updated to reflect strict fail-loud behavior. Added regression test `test_failed_investigation_run_writes_audit_event_and_returns_status_failed`.
 
+### 16. Test Mock Incompatibility via Extra `run_id` Keyword Argument
+- **Mistake**: When adding observability tracing to `call_llm`, the agent added `run_id=state.get("run_id")` keyword argument to `call_llm(prompt, ...)` call sites. Existing adversarial tests monkeypatching `call_llm` with positional-only lambda signatures crashed with `unexpected keyword argument 'run_id'`.
+- **Correction**: Updated `call_llm` to accept `**kwargs` with backwards-compatible defaults, invoked `call_llm` positionally in finding/option generators, and resolved `run_id` from context.
+
 ---
 
 ## 5. Verification Methodologies
@@ -133,7 +140,7 @@ Every feature and bugfix was verified through multi-layered automated and manual
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        VERIFICATION LAYERS                             │
 ├────────────────────────────────┬───────────────────────────────────────┤
-│ 1. Deterministic Unit Tests    │ 103 tests in pytest (Decimal math,    │
+│ 1. Deterministic Unit Tests    │ 112 tests in pytest (Decimal math,    │
 │                                │ rounding, tiers, quarantine, caps)    │
 ├────────────────────────────────┼───────────────────────────────────────┤
 │ 2. Concurrency Stress Probing  │ 10 concurrent threads hammering credit│
@@ -154,7 +161,7 @@ Every feature and bugfix was verified through multi-layered automated and manual
 ```
 
 1. **Deterministic Test Suite Execution**:
-   - `pytest backend/tests` executes 103 automated tests across engine math, model constraints, agent validator, API routes, and concurrency.
+   - `pytest backend/tests` executes 112 automated tests across engine math, model constraints, agent validator, API routes, multi-provider resilience, and concurrency.
 2. **Concurrency Verification**:
    - `tests/test_concurrency.py` launches 10 concurrent Python threads attempting to approve credit for the same $30.00 discrepancy. Asserts that exactly 1 request succeeds (HTTP 201) while 9 requests are rejected with 409 Conflict or 400 Cap Exceeded, leaving the database credit total at exactly 3000 cents.
 3. **Trigger Immutability Verification**:

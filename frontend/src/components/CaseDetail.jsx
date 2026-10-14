@@ -446,6 +446,27 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                 <span className="font-mono" style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                   Run ID: {investigation.id}
                 </span>
+                {investigation.token_usage?.provider && (
+                  <span
+                    className="badge"
+                    style={{
+                      background: 'rgba(99, 102, 241, 0.15)',
+                      color: '#818cf8',
+                      border: '1px solid rgba(99, 102, 241, 0.35)',
+                      textTransform: 'none',
+                      fontSize: '0.75rem',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                    }}
+                  >
+                    <span>LLM:</span>
+                    <strong>{investigation.token_usage.provider}</strong>
+                    {investigation.token_usage.model && (
+                      <span style={{ opacity: 0.8 }}>({investigation.token_usage.model})</span>
+                    )}
+                  </span>
+                )}
                 {investigation.token_usage && (
                   <span className="citation-pill">
                     Tokens: {investigation.token_usage.total_tokens || 0}

@@ -8,6 +8,7 @@ with a deterministic mock mode for offline testing and CI.
 import json
 import logging
 import re
+import time
 from typing import Any, Optional
 
 from app.agent.prompts import (
@@ -16,9 +17,37 @@ from app.agent.prompts import (
     build_analysis_prompt,
     build_resolution_options_prompt,
 )
+from app.agent.providers import classify_error, get_provider
 from app.config import settings
+from app.logging import log_llm_execution
 
 logger = logging.getLogger(__name__)
+
+
+def sanitize_error_message(text: str) -> str:
+    """Strips API keys, bearer tokens, and secrets from error text."""
+    if not text:
+        return ""
+    # Strip any configured keys
+    for key in (settings.gemini_api_key, settings.groq_api_key, settings.openrouter_api_key):
+        if key and len(key) > 5 and not key.startswith("your-") and not key.startswith("your_"):
+            text = text.replace(key, "[REDACTED_API_KEY]")
+    # Redact common key prefixes and formats
+    text = re.sub(r"gsk_[A-Za-z0-9_-]+", "[REDACTED_GROQ_KEY]", text)
+    text = re.sub(r"sk-or-v1-[A-Za-z0-9_-]+", "[REDACTED_OPENROUTER_KEY]", text)
+    text = re.sub(r"AIza[0-9A-Za-z-_]{35}", "[REDACTED_GEMINI_KEY]", text)
+    text = re.sub(r"AQ\.[A-Za-z0-9_-]+", "[REDACTED_GEMINI_KEY]", text)
+    text = re.sub(r"Bearer\s+[A-Za-z0-9_\-\.]+", "Bearer [REDACTED]", text, flags=re.IGNORECASE)
+    return text
+
+
+class AllProvidersFailedError(RuntimeError):
+    """Raised when all configured LLM providers fail or are exhausted."""
+
+    def __init__(self, message: str, attempts: Optional[list[dict[str, Any]]] = None):
+        sanitized = sanitize_error_message(message)
+        super().__init__(sanitized)
+        self.attempts = attempts or []
 
 
 def _clean_json_markdown(text: str) -> str:
@@ -222,61 +251,167 @@ def call_llm(
     prompt: str,
     system_instruction: str,
     timeout_sec: int = 15,
-) -> tuple[str, dict[str, int]]:
+    **kwargs,
+) -> tuple[str, dict[str, Any]]:
     """
-    Invokes the Gemini LLM via google-genai or returns mock output.
-    Returns (raw_response_text, token_usage_dict).
+    Invokes LLM providers in fallback order (Gemini -> Groq -> OpenRouter)
+    with automatic retries on 429/5xx/timeout and immediate failover on 401/403/404.
+    Returns (raw_response_text, token_usage_dict_with_meta).
+    Never mocks or fabricates output when LLM_MODE=real.
     """
-    if settings.llm_mode == "mock" or not settings.gemini_api_key:
-        return ("", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+    run_id = kwargs.get("run_id")
+    if settings.llm_mode == "mock":
+        return ("", {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "provider": "mock",
+            "model": "mock-deterministic",
+            "attempts": [],
+        })
 
-    from google import genai
-    from google.genai import types
+    provider_names = [p.strip().lower() for p in settings.llm_providers.split(",") if p.strip()]
+    attempts: list[dict[str, Any]] = []
+    failed_reasons: list[tuple[str, str]] = []
 
-    # Candidate models: try configured model first, then fallback to current stable models
-    configured_model = settings.gemini_model or "gemini-3.1-flash-lite"
-    candidate_models = [configured_model]
-    for fallback in ["gemini-3.1-flash-lite", "gemini-3.8-flash"]:
-        if fallback not in candidate_models:
-            candidate_models.append(fallback)
+    total_start_time = time.time()
+    max_total_timeout = 40.0
 
-    last_err: Optional[Exception] = None
-    client = genai.Client(
-        api_key=settings.gemini_api_key,
-        http_options=types.HttpOptions(timeout=timeout_sec * 1000),
-    )
-    config = types.GenerateContentConfig(
-        system_instruction=system_instruction,
-        response_mime_type="application/json",
-    )
+    for p_name in provider_names:
+        elapsed = time.time() - total_start_time
+        if elapsed >= max_total_timeout:
+            raise TimeoutError(f"Total LLM execution deadline exceeded ({max_total_timeout}s)")
 
-    for model_name in candidate_models:
-        for attempt in range(2):
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=config,
+        try:
+            provider = get_provider(p_name)
+        except Exception as e:
+            logger.warning("Could not instantiate provider %s: %s", p_name, sanitize_error_message(str(e)))
+            continue
+
+        if not provider.is_configured:
+            # Check if key is present but model is missing
+            key_val = getattr(provider, "_api_key", "")
+            model_val = getattr(provider, "_model", "")
+            if key_val and not model_val:
+                msg = f"{p_name.upper()}_API_KEY is configured but {p_name.upper()}_MODEL is missing"
+                attempts.append({"provider": p_name, "error_type": "MISSING_MODEL"})
+                failed_reasons.append((p_name, msg))
+                logger.warning("Provider %s skipped: %s", p_name, msg)
+            continue
+
+        # Attempt 1
+        elapsed = time.time() - total_start_time
+        remaining = max_total_timeout - elapsed
+        if remaining <= 0:
+            raise TimeoutError(f"Total LLM execution deadline exceeded ({max_total_timeout}s)")
+
+        call_timeout = min(timeout_sec, max(1.0, remaining))
+        t0 = time.perf_counter()
+        try:
+            raw_text, tokens, prov_name, model_name = provider.generate_json(
+                system_instruction=system_instruction,
+                prompt=prompt,
+                timeout_sec=int(call_timeout),
+            )
+            cleaned = _clean_json_markdown(raw_text)
+            json.loads(cleaned)
+            latency_ms = (time.perf_counter() - t0) * 1000
+            log_llm_execution(
+                run_id=run_id,
+                provider=prov_name,
+                model=model_name,
+                attempt=1,
+                latency_ms=latency_ms,
+                status="SUCCESS",
+                tokens=tokens,
+            )
+            tokens_result = dict(tokens)
+            tokens_result["provider"] = prov_name
+            tokens_result["model"] = model_name
+            tokens_result["attempts"] = list(attempts)
+            return (cleaned, tokens_result)
+        except Exception as e:
+            latency_ms = (time.perf_counter() - t0) * 1000
+            error_type, should_retry = classify_error(e)
+            sanitized_err = sanitize_error_message(str(e))
+            log_llm_execution(
+                run_id=run_id,
+                provider=provider.name,
+                model=provider.model,
+                attempt=1,
+                latency_ms=latency_ms,
+                status="FAILED",
+                error_type=error_type,
+            )
+            attempts.append({"provider": provider.name, "error_type": error_type})
+
+            if not should_retry:
+                failed_reasons.append((provider.name, f"{error_type}: {sanitized_err}"))
+                logger.warning(
+                    "Provider %s (%s) failed with non-retryable error %s: %s",
+                    provider.name,
+                    provider.model,
+                    error_type,
+                    sanitized_err,
                 )
+                continue
 
-                tokens = {
-                    "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0) if response.usage_metadata else 0,
-                    "completion_tokens": getattr(response.usage_metadata, "candidates_token_count", 0) if response.usage_metadata else 0,
-                    "total_tokens": getattr(response.usage_metadata, "total_token_count", 0) if response.usage_metadata else 0,
-                }
-                return (response.text or "", tokens)
-            except Exception as e:
-                logger.warning("Gemini LLM call (model=%s, attempt=%d) failed: %s", model_name, attempt + 1, e)
-                last_err = e
-                # If model is deprecated / not found (404), skip retrying this model and advance to next candidate immediately
-                err_str = str(e)
-                if "404" in err_str or "NOT_FOUND" in err_str:
-                    break
+            # Retry once after 1s for 429, 5xx, or timeout
+            logger.info("Provider %s encountered %s; retrying once after 1s...", provider.name, error_type)
+            time.sleep(1)
 
-    raise RuntimeError(f"Gemini LLM call failed across models {candidate_models}: {last_err}")
+            elapsed = time.time() - total_start_time
+            remaining = max_total_timeout - elapsed
+            if remaining <= 0:
+                raise TimeoutError(f"Total LLM execution deadline exceeded ({max_total_timeout}s)")
+
+            call_timeout2 = min(timeout_sec, max(1.0, remaining))
+            t1 = time.perf_counter()
+            try:
+                raw_text, tokens, prov_name, model_name = provider.generate_json(
+                    system_instruction=system_instruction,
+                    prompt=prompt,
+                    timeout_sec=int(call_timeout2),
+                )
+                cleaned = _clean_json_markdown(raw_text)
+                json.loads(cleaned)
+                latency_ms = (time.perf_counter() - t1) * 1000
+                log_llm_execution(
+                    run_id=run_id,
+                    provider=prov_name,
+                    model=model_name,
+                    attempt=2,
+                    latency_ms=latency_ms,
+                    status="SUCCESS",
+                    tokens=tokens,
+                )
+                tokens_result = dict(tokens)
+                tokens_result["provider"] = prov_name
+                tokens_result["model"] = model_name
+                tokens_result["attempts"] = list(attempts)
+                return (cleaned, tokens_result)
+            except Exception as e2:
+                latency_ms = (time.perf_counter() - t1) * 1000
+                error_type2, _ = classify_error(e2)
+                sanitized_err2 = sanitize_error_message(str(e2))
+                log_llm_execution(
+                    run_id=run_id,
+                    provider=provider.name,
+                    model=provider.model,
+                    attempt=2,
+                    latency_ms=latency_ms,
+                    status="FAILED",
+                    error_type=error_type2,
+                )
+                attempts.append({"provider": provider.name, "error_type": error_type2})
+                failed_reasons.append((provider.name, f"{error_type2}: {sanitized_err2}"))
+                continue
+
+    err_details = "; ".join(f"{p}: {r}" for p, r in failed_reasons) if failed_reasons else "No enabled LLM providers configured"
+    raise AllProvidersFailedError(f"All LLM providers failed: {err_details}", attempts=attempts)
 
 
-def generate_investigation_findings(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, int]]:
+def generate_investigation_findings(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Analyzes evidence and deterministic calculation to produce findings."""
     prompt = build_analysis_prompt(
         case_title=state.get("case_data", {}).get("title", ""),
@@ -297,26 +432,39 @@ def generate_investigation_findings(state: dict[str, Any]) -> tuple[dict[str, An
     if settings.llm_mode == "mock":
         data = _mock_analysis(prompt, state)
         data["generation_path"] = "mock"
-        return data, {"prompt_tokens": 120, "completion_tokens": 85, "total_tokens": 205}
-
-    if not settings.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY is not configured while LLM_MODE=real; refusing to fabricate mock findings in live mode")
+        tokens = {
+            "prompt_tokens": 120,
+            "completion_tokens": 85,
+            "total_tokens": 205,
+            "provider": "mock",
+            "model": "mock-deterministic",
+            "attempts": [],
+        }
+        return data, tokens
 
     try:
-        raw_text, tokens = call_llm(prompt, FINDING_ANALYSIS_SYSTEM_INSTRUCTION)
+        raw_text, tokens = call_llm(
+            prompt,
+            FINDING_ANALYSIS_SYSTEM_INSTRUCTION,
+        )
         cleaned = _clean_json_markdown(raw_text)
         parsed = json.loads(cleaned)
         parsed["generation_path"] = "llm"
         return parsed, tokens
+    except AllProvidersFailedError:
+        raise
     except Exception as e:
-        logger.error("Error in real LLM findings call: %s", e)
-        raise RuntimeError(f"Live Gemini LLM call failed: {e}; refusing to fake AI analysis")
+        logger.error("Error in real LLM findings call: %s", sanitize_error_message(str(e)))
+        raise AllProvidersFailedError(
+            f"Live LLM call failed: {sanitize_error_message(str(e))}; refusing to fake AI analysis",
+            attempts=[],
+        )
 
 
 def generate_resolution_options(
     state: dict[str, Any],
     finding: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Formulates resolution options based on confirmed findings."""
     prompt = build_resolution_options_prompt(
         finding_type=finding.get("finding_type", "UNRESOLVED"),
@@ -325,13 +473,21 @@ def generate_resolution_options(
     )
 
     if settings.llm_mode == "mock":
-        return _mock_options(prompt, finding, state), {"prompt_tokens": 80, "completion_tokens": 45, "total_tokens": 125}
-
-    if not settings.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY is not configured while LLM_MODE=real; refusing to fabricate mock options in live mode")
+        tokens = {
+            "prompt_tokens": 80,
+            "completion_tokens": 45,
+            "total_tokens": 125,
+            "provider": "mock",
+            "model": "mock-deterministic",
+            "attempts": [],
+        }
+        return _mock_options(prompt, finding, state), tokens
 
     try:
-        raw_text, tokens = call_llm(prompt, RESOLUTION_OPTIONS_SYSTEM_INSTRUCTION)
+        raw_text, tokens = call_llm(
+            prompt,
+            RESOLUTION_OPTIONS_SYSTEM_INSTRUCTION,
+        )
         cleaned = _clean_json_markdown(raw_text)
         parsed = json.loads(cleaned)
         if isinstance(parsed, dict) and "options" in parsed:
@@ -339,6 +495,11 @@ def generate_resolution_options(
         if not isinstance(parsed, list):
             parsed = [parsed]
         return parsed, tokens
+    except AllProvidersFailedError:
+        raise
     except Exception as e:
-        logger.error("Error in real LLM options call: %s", e)
-        raise RuntimeError(f"Live Gemini LLM options call failed: {e}; refusing to fake AI options")
+        logger.error("Error in real LLM options call: %s", sanitize_error_message(str(e)))
+        raise AllProvidersFailedError(
+            f"Live LLM options call failed: {sanitize_error_message(str(e))}; refusing to fake AI options",
+            attempts=[],
+        )

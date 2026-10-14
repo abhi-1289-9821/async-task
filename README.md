@@ -142,17 +142,32 @@ Implemented in [`backend/app/middleware/auth.py`](backend/app/middleware/auth.py
 
 ---
 
-### 8. Agentic Investigation Workflow (Phase 3)
+### 8. Agentic Investigation & Multi-Provider LLM Resilience
 Implemented in [`backend/app/agent/`](backend/app/agent/):
 - **LangGraph StateGraph:** Multi-node execution pipeline (`gather_evidence` -> `run_calculation` -> `analyze_findings` -> `formulate_options` -> `validate_and_sanitize` -> `persist_results`).
-- **Prompt Injection Defense:** Untrusted dispute inputs wrapped in strict XML tags (`<untrusted_customer_dispute>`) with escaped delimiters. Customer name and dispute metadata isolated from system prompt instructions.
-- **Citation & Consistency Validation:** Pydantic schema validation (`LLMFindingPayload`), verification that cited line result IDs exist in calculation output, narrative financial figure consistency checks, and rejection of hallucinated credit amounts.
-- **Dual-Mode AI Engine:** `LLM_MODE=mock` for deterministic test automation and offline CI; `LLM_MODE=real` with Gemini API integration. Strict fail-loud error handling: external AI API failures immediately transition investigation runs to `FAILED` status and write an `INVESTIGATION_RUN_FAILED` audit event to `case_events`, preserving deterministic engine math while preventing unanchored mock findings in production.
+- **Multi-Provider Fallback Hierarchy:**
+  - Configurable fallback chain via `LLM_PROVIDERS` (default: `gemini,groq,openrouter`).
+  - **GeminiProvider:** Primary provider using official `google-genai` SDK (`GEMINI_API_KEY`, `GEMINI_MODEL`).
+  - **OpenAICompatProvider:** Resilient HTTP provider using `httpx` for Groq (`GROQ_API_KEY`, `GROQ_MODEL`) and OpenRouter (`OPENROUTER_API_KEY`, `OPENROUTER_MODEL`).
+  - **Auto-Recovery on Schema Constraints:** If an open-weights model rejects `response_format={"type":"json_object"}` (HTTP 400), it automatically retries once without it and extracts JSON from markdown code fences.
+- **Quota & Free-Tier Resilience:**
+  - **HTTP 429 (Rate Limits) / 5xx Server Errors / Timeouts:** Waits 1s and retries once; on repeated failure, advances to next provider in sequence.
+  - **HTTP 401/403 (Auth Errors) & 404 (Model Not Found):** Immediately skipped without retry.
+  - **Malformed JSON:** If a provider produces non-JSON output, it is treated as a provider failure and immediately falls through to the next provider.
+  - **Execution Deadline:** Total LLM execution time bounded to 40s per call.
+- **Fail-Loud Guarantee (Never Mock in Real Mode):**
+  - When `LLM_MODE=real`, the system strictly refuses to fabricate or mock AI findings.
+  - If all providers fail: persists a `FAILED` `InvestigationRun`, writes an append-only `INVESTIGATION_RUN_FAILED` audit event to `case_events` with actor, sanitized reason, and attempts history, and returns **HTTP 502 Bad Gateway** with `{id, run_id, status: "FAILED", reason}`.
+- **Traceability & Secret Isolation:**
+  - Records provider name, model, token counts, and failure attempts list in `InvestigationRun.token_usage`.
+  - Structured JSON logging (`logger="llm"`) with run ID, provider, model, attempt, latency, status, error type, and token counts. API keys, Authorization headers, and prompts are never logged.
+  - Diagnostic CLI probe: `python backend/scripts/check_llm.py` pings all configured providers and reports latency/status without printing secrets.
+  - Configuration status probe: `GET /api/llm/status` (any authenticated role) reports `configured` (bool) and model per provider.
 
 ### 9. Frontend Audit Workspace (Phase 4)
 Implemented in [`frontend/`](frontend/):
 - Modern dark-mode Single Page Application built with React 19, Vite, and custom CSS design tokens.
-- Interactive dispute workspace featuring deterministic recalculation explorer, LangGraph AI investigation runner, human review modal (`ACCEPT`, `EDIT`, `REJECT`), and credit approval panel.
+- Interactive dispute workspace featuring deterministic recalculation explorer, LangGraph AI investigation runner with live LLM provider badge (`LLM: provider (model)`), human review modal (`ACCEPT`, `EDIT`, `REJECT`), and credit approval panel.
 - Demonstration presets for instant reproducible testing of multi-tier discrepancies, ambiguous contract rules, clean calculations, and prompt injection defense.
 
 ---
@@ -188,10 +203,14 @@ To maintain project focus and feasibility, the following areas are explicitly ou
 | `POST` | `/api/cases/{id}/evidence` | Upload usage evidence (bumps version, marks stale) | **Implemented** |
 | `POST` | `/api/calculations/run` | Execute deterministic billing engine on evidence | **Implemented** |
 | `GET` | `/api/calculations/{id}` | Retrieve calculation result by ID | **Implemented** |
+| `POST` | `/api/cases/{case_id}/investigations` | Run autonomous LangGraph investigation (502 on failure) | **Implemented** |
+| `GET` | `/api/cases/{case_id}/investigations` | List investigation runs for a case | **Implemented** |
+| `GET` | `/api/investigations/{id}` | Retrieve full details of an investigation run | **Implemented** |
 | `GET` | `/api/findings/case/{case_id}` | List findings and review history for a case | **Implemented** |
 | `POST` | `/api/findings/{id}/review` | Submit human review (`ACCEPT`, `EDIT`, `REJECT`) | **Implemented** |
 | `POST` | `/api/credits/approve` | Approve credit under row lock and cap check | **Implemented** |
 | `GET` | `/api/credits/case/{case_id}` | List approved credits for a case | **Implemented** |
+| `GET` | `/api/llm/status` | List LLM provider configuration status and model names | **Implemented** |
 | `GET` | `/healthz` | Health check probe | **Implemented** |
 
 ---
@@ -204,15 +223,21 @@ To maintain project focus and feasibility, the following areas are explicitly ou
 
 ---
 
-## 🧪 Test Suite & Verification (103 Passing Tests, 1 Skipped)
+## 🧪 Test Suite & Verification (112 Passing Tests, 1 Skipped)
 
 The test suite runs under `pytest`:
 
 ```bash
-pytest -v
+LLM_MODE=mock pytest -v
 ```
 
 ### Breakdown of Test Results:
+- `test_billing_engine.py`: 55 tests (pure deterministic arithmetic, tiers, included units, rounding, commitments, exemptions, quarantine)
+- `test_models_and_db.py`: 10 tests (schema, foreign keys, append-only triggers, unique constraints, check constraints)
+- `test_api_and_services.py`: 23 tests (case CRUD, evidence versioning, calculation API, human reviews, credit approval caps, idempotency)
+- `test_agent.py`: 13 tests (LangGraph workflow, gates, prompt injection defense, citation validation, consistency checks)
+- `test_concurrency.py`: 2 tests (10 concurrent threads hammering credit approvals, PostgreSQL SELECT FOR UPDATE test)
+- `test_llm_resilience.py`: 9 tests (Gemini 429 quota fallback to Groq, 500 fallback to OpenRouter, 404 skips, invalid JSON fallback, response_format retry, secret isolation, HTTP 502 failure response, GET /api/llm/status)
 - **Pricing & Calculation Logic (58 tests in [`backend/tests/test_billing_engine.py`](backend/tests/test_billing_engine.py)):**
   - Boundary rounding (`ROUND_HALF_UP`, half-away-from-zero).
   - Flat, per-unit, tiered graduated, and tiered volume calculations.

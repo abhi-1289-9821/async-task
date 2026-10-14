@@ -172,5 +172,34 @@ Each entry: Phase, timestamp, category, event, fix, status.
 - **Outcome**: All 98 unit and regression tests pass cleanly (1 skipped for live Postgres).
 - **Status**: resolved
 
+## Phase 6: Multi-Provider LLM Resilience & Free-Tier Quota Fallback
+
+### [Phase 6] [2026-10-14 11:30] — Multi-Provider Fallback (Gemini -> Groq -> OpenRouter) & Observability Hardening
+- **Multi-Provider Architecture (`providers.py`)**:
+  - Implemented `GeminiProvider` via `google-genai` and `OpenAICompatProvider` via `httpx` supporting Groq and OpenRouter.
+  - Standardized interface: `generate_json(system_instruction, prompt, timeout_sec) -> (text, token_usage_dict, provider_name, model_name)`.
+  - Added auto-recovery for models rejecting `response_format={"type":"json_object"}` (HTTP 400), retrying once without `response_format` and extracting JSON from markdown fences.
+- **Ordered Provider Fallback & Retry Invariant (`llm_client.py`)**:
+  - Fallback order configured via `LLM_PROVIDERS` (default: `gemini,groq,openrouter`).
+  - Automatically retries once after 1s on HTTP 429 (Rate Limit / Quota Exhaustion), 5xx Server Errors, and Timeouts.
+  - Skips immediately without retry on HTTP 401/403 (Auth Error) or HTTP 404 (Model Not Found).
+  - Bounded total call time to 40s to guarantee strict SLOs.
+  - Treats invalid JSON from any provider as a failure and immediately falls through to the next provider.
+- **Fail-Loud Error & Traceability (`graph.py`, `investigations.py`)**:
+  - When all providers fail, persists `FAILED` `InvestigationRun`, writes immutable `INVESTIGATION_RUN_FAILED` audit event to `case_events` with actor, sanitized reason, and full attempts breakdown.
+  - Investigation trigger endpoint returns HTTP 502 Bad Gateway with run ID and failure reason.
+  - Tracks provider, model, token counts, and failed attempts list in `InvestigationRun.token_usage`.
+- **Secret Isolation**:
+  - `sanitize_error_message` redacts API keys and Bearer tokens from all logs, exceptions, and audit records.
+  - Added `GET /api/llm/status` endpoint exposing only `configured` (bool) and `model` name without keys.
+  - Added `backend/scripts/check_llm.py` diagnostic probe testing connectivity without printing keys.
+- **Frontend Badge**:
+  - Added provider and model badge (`LLM: provider (model)`) in the case investigation panel.
+- **Test Coverage**:
+  - Authored comprehensive test suite `test_llm_resilience.py` (9 tests covering 429 fallback, 500 fallback, 404 skips, invalid JSON fallback, response_format retry, secret isolation, HTTP 502, and status endpoint).
+  - Total automated test suite now at 112 passing tests, 1 skipped.
+- **Status**: resolved
+
+
 
 

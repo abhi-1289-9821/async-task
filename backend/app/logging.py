@@ -126,3 +126,37 @@ def log_agent_node_execution(
         f"Agent node '{node}' finished in {latency_ms:.2f}ms with status {status}",
         extra={"structured_data": payload},
     )
+
+
+llm_logger = logging.getLogger("llm")
+
+
+def log_llm_execution(
+    run_id: Optional[str],
+    provider: str,
+    model: str,
+    attempt: int,
+    latency_ms: float,
+    status: str,
+    error_type: Optional[str] = None,
+    tokens: Optional[dict[str, int]] = None,
+) -> None:
+    """
+    Emits structured JSON metrics for an LLM provider call attempt.
+    Never logs API keys, Authorization headers, or full prompts.
+    """
+    payload: dict[str, Any] = {
+        "type": "llm_call",
+        "run_id": run_id,
+        "provider": provider,
+        "model": model,
+        "attempt": attempt,
+        "latency_ms": round(latency_ms, 2),
+        "status": status,
+        "error_type": error_type,
+        "tokens": tokens or {},
+    }
+    llm_logger.info(
+        f"LLM {provider} ({model}) attempt {attempt} finished with status {status}",
+        extra={"structured_data": payload},
+    )

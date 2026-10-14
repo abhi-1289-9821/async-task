@@ -22,6 +22,7 @@ from app.routers import (
     findings_router,
     credits_router,
     investigations_router,
+    llm_router,
 )
 
 # Initialize structured JSON logging
@@ -69,6 +70,7 @@ app.include_router(calculations_router)
 app.include_router(findings_router)
 app.include_router(credits_router)
 app.include_router(investigations_router)
+app.include_router(llm_router)
 
 
 @app.get("/healthz", tags=["health"])

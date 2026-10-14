@@ -8,3 +8,5 @@ from app.routers.calculations import router as calculations_router
 from app.routers.findings import router as findings_router
 from app.routers.credits import router as credits_router
 from app.routers.investigations import router as investigations_router
+from app.routers.llm import router as llm_router
+

@@ -6,6 +6,7 @@ FastAPI endpoints to trigger and inspect LangGraph investigation runs.
 
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.agent.graph import run_investigation
@@ -22,6 +23,11 @@ router = APIRouter(tags=["investigations"])
     "/api/cases/{case_id}/investigations",
     response_model=InvestigationRunResponse,
     status_code=status.HTTP_201_CREATED,
+    responses={
+        status.HTTP_502_BAD_GATEWAY: {
+            "description": "Investigation run failed due to upstream provider failures"
+        }
+    },
 )
 def trigger_investigation(
     case_id: str,
@@ -49,7 +55,16 @@ def trigger_investigation(
         actor=user.identity,
     )
     if db_run.status == RunStatus.FAILED:
-        response.status_code = status.HTTP_200_OK
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "id": db_run.id,
+                "run_id": db_run.id,
+                "status": "FAILED",
+                "reason": db_run.status_reason,
+                "status_reason": db_run.status_reason,
+            },
+        )
     return db_run
 
 

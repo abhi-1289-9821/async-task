@@ -236,9 +236,16 @@ class InvestigationWorkflow:
         """Calls LLM Call 1 to produce structured investigation findings."""
         start_t = time.perf_counter()
         finding_dict, tokens = llm_client.generate_investigation_findings(state)
-        token_usage = state.get("token_usage", {})
-        for k, v in tokens.items():
-            token_usage[k] = token_usage.get(k, 0) + v
+        token_usage = dict(state.get("token_usage") or {})
+        for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            if k in tokens and isinstance(tokens[k], (int, float)):
+                token_usage[k] = token_usage.get(k, 0) + tokens[k]
+        if tokens.get("provider"):
+            token_usage["provider"] = tokens["provider"]
+        if tokens.get("model"):
+            token_usage["model"] = tokens["model"]
+        if "attempts" in tokens and isinstance(tokens["attempts"], list):
+            token_usage["attempts"] = list(tokens["attempts"])
 
         llm_fallback = (finding_dict.get("generation_path") == "fallback_mock")
         log_agent_node_execution(
@@ -262,9 +269,20 @@ class InvestigationWorkflow:
         primary_finding = raw_findings[0] if raw_findings else {}
         options_list, tokens = llm_client.generate_resolution_options(state, primary_finding)
 
-        token_usage = state.get("token_usage", {})
-        for k, v in tokens.items():
-            token_usage[k] = token_usage.get(k, 0) + v
+        token_usage = dict(state.get("token_usage") or {})
+        for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            if k in tokens and isinstance(tokens[k], (int, float)):
+                token_usage[k] = token_usage.get(k, 0) + tokens[k]
+        if tokens.get("provider"):
+            token_usage["provider"] = tokens["provider"]
+        if tokens.get("model"):
+            token_usage["model"] = tokens["model"]
+        if "attempts" in tokens and isinstance(tokens["attempts"], list):
+            existing_attempts = token_usage.get("attempts", [])
+            for att in tokens["attempts"]:
+                if att not in existing_attempts:
+                    existing_attempts.append(att)
+            token_usage["attempts"] = existing_attempts
 
         log_agent_node_execution(
             run_id=state["run_id"],
@@ -503,13 +521,23 @@ def run_investigation(
         db.rollback()
         # Persist a FAILED InvestigationRun so audit trail accurately reflects failure
         failed_run = db.query(InvestigationRun).filter(InvestigationRun.id == run_id).one_or_none()
+        attempts = getattr(e, "attempts", [])
+        clean_reason = llm_client.sanitize_error_message(str(e))
         if not failed_run:
             failed_run = InvestigationRun(
                 id=run_id,
                 case_id=case_id,
                 status=RunStatus.FAILED,
-                status_reason=str(e),
+                status_reason=clean_reason,
                 evidence_version=evidence_version,
+                token_usage={
+                    "provider": None,
+                    "model": None,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "attempts": attempts,
+                },
                 completed_at=datetime.now(timezone.utc),
             )
             db.add(failed_run)
@@ -519,7 +547,9 @@ def run_investigation(
                 actor=actor,
                 details={
                     "run_id": run_id,
-                    "error": str(e),
+                    "actor": actor,
+                    "reason": clean_reason,
+                    "attempts": attempts,
                     "evidence_version": evidence_version,
                 },
                 correlation_id=correlation_id,

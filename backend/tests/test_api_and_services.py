@@ -959,10 +959,10 @@ class TestCreditApprovalAndConcurrencyCap:
             "/api/cases/case-investigate-fail/investigations",
             headers=REVIEWER_HEADERS,
         )
-        assert res.status_code == 200
+        assert res.status_code == 502
         data = res.json()
         assert data["status"] == "FAILED"
-        assert "Simulated upstream Gemini API connection failure" in data["status_reason"]
+        assert "Simulated upstream Gemini API connection failure" in (data.get("reason") or data.get("status_reason", ""))
 
         with SessionLocal() as db:
             events = db.query(CaseEvent).filter(CaseEvent.case_id == "case-investigate-fail").all()

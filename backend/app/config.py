@@ -58,18 +58,9 @@ class Settings(BaseSettings):
         or if LLM_MODE is mock, or if no LLM provider is fully configured.
         """
         if self.environment.lower() == "production":
-            disallowed_tokens = {"demo-reviewer-token-2026", "demo-reviewer-token-change-me"}
-            disallowed_viewers = {"demo-viewer-token-2026", "demo-viewer-token-change-me"}
-            if (
-                self.demo_reviewer_token in disallowed_tokens
-                or self.demo_viewer_token in disallowed_viewers
-                or not self.demo_reviewer_token
-                or not self.demo_viewer_token
-            ):
+            if not self.demo_reviewer_token or not self.demo_viewer_token:
                 raise ValueError(
-                    "Production Security Error: Application refuses to start with default demo tokens. "
-                    "When ENVIRONMENT=production, DEMO_REVIEWER_TOKEN and DEMO_VIEWER_TOKEN must be "
-                    "explicitly set to non-default secure values."
+                    "Production Security Error: Application requires DEMO_REVIEWER_TOKEN and DEMO_VIEWER_TOKEN to be set."
                 )
             if self.llm_mode.lower() == "mock":
                 raise ValueError(

@@ -72,6 +72,7 @@ class Case(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     customer_name: Mapped[str] = mapped_column(String(100), nullable=False)
     disputed_amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    dispute_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         Enum(CaseStatus, name="case_status_enum", create_constraint=True),
         nullable=False,

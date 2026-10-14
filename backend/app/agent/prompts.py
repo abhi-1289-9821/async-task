@@ -139,7 +139,7 @@ Please generate an investigation analysis JSON with:
 - "assumptions": List of assumptions made during analysis.
 - "open_questions": Questions needing follow-up.
 - "missing_evidence_questions": Questions regarding missing data, if applicable.
-- "citation_ids": List of result_id strings (e.g. ["res_..."]) directly supporting this finding.
+- "citation_ids": List of cited identifiers directly supporting this finding: including result_id strings (e.g. "res_..."), invoice line IDs, and contract rule IDs.
 - "calculation_line_result_id": Integer DB ID of the primary line result associated with this finding, or null.
 """
 

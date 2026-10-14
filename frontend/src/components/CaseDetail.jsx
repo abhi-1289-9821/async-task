@@ -293,6 +293,12 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
             <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
               Customer: <strong style={{ color: '#fff' }}>{caseData.customer_name}</strong>
             </div>
+            {caseData.dispute_description && (
+              <div style={{ marginTop: '0.75rem', padding: '0.65rem 0.85rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid var(--accent-cyan)', fontSize: '0.825rem', color: '#cbd5e1', lineHeight: '1.4' }}>
+                <span style={{ fontWeight: 600, color: '#38bdf8', marginRight: '0.4rem' }}>Customer Statement:</span>
+                "{caseData.dispute_description}"
+              </div>
+            )}
           </div>
 
           <div style={{ textAlign: 'right' }}>
@@ -498,12 +504,20 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                   {/* Citations */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Citation Anchors:</span>
-                    {f.citation_ids && f.citation_ids.map((cid, i) => (
-                      <span key={i} className="citation-pill">
-                        <Hash size={11} />
-                        {cid}
-                      </span>
-                    ))}
+                    {f.citation_ids && f.citation_ids.map((cid, i) => {
+                      const isResult = cid.startsWith('res_');
+                      const isLine = cid.startsWith('line-');
+                      const isRule = cid.startsWith('rule-');
+                      const isEvent = cid.startsWith('ev-') || cid.startsWith('evt-');
+                      const typeLabel = isResult ? 'Engine Result' : isLine ? 'Line' : isRule ? 'Rule' : isEvent ? 'Usage Telemetry' : 'Evidence';
+                      return (
+                        <span key={i} className="citation-pill" title={`${typeLabel}: ${cid}`}>
+                          <Hash size={11} />
+                          <span style={{ opacity: 0.7, fontSize: '0.68rem', marginRight: '3px' }}>{typeLabel}:</span>
+                          {cid}
+                        </span>
+                      );
+                    })}
                     <span style={{ fontSize: '0.72rem', color: f.citation_validation_passed ? 'var(--accent-emerald)' : 'var(--accent-rose)', fontWeight: 600 }}>
                       {f.citation_validation_passed ? '✓ Citations Verified' : '✗ Verification Failed'}
                     </span>

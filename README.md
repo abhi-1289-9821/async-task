@@ -147,7 +147,7 @@ Implemented in [`backend/app/agent/`](backend/app/agent/):
 - **LangGraph StateGraph:** Multi-node execution pipeline (`gather_evidence` -> `run_calculation` -> `analyze_findings` -> `formulate_options` -> `validate_and_sanitize` -> `persist_results`).
 - **Prompt Injection Defense:** Untrusted dispute inputs wrapped in strict XML tags (`<untrusted_customer_dispute>`) with escaped delimiters. Customer name and dispute metadata isolated from system prompt instructions.
 - **Citation & Consistency Validation:** Pydantic schema validation (`LLMFindingPayload`), verification that cited line result IDs exist in calculation output, narrative financial figure consistency checks, and rejection of hallucinated credit amounts.
-- **Dual-Mode AI Engine:** `LLM_MODE=mock` for deterministic test automation; `LLM_MODE=real` with Gemini API integration. Graceful error handling transitions to `PARTIAL` status upon external AI failures while preserving deterministic engine math.
+- **Dual-Mode AI Engine:** `LLM_MODE=mock` for deterministic test automation and offline CI; `LLM_MODE=real` with Gemini API integration. Strict fail-loud error handling: external AI API failures immediately transition investigation runs to `FAILED` status and write an `INVESTIGATION_RUN_FAILED` audit event to `case_events`, preserving deterministic engine math while preventing unanchored mock findings in production.
 
 ### 9. Frontend Audit Workspace (Phase 4)
 Implemented in [`frontend/`](frontend/):
@@ -204,7 +204,7 @@ To maintain project focus and feasibility, the following areas are explicitly ou
 
 ---
 
-## 🧪 Test Suite & Verification (98 Passing Tests, 1 Skipped)
+## 🧪 Test Suite & Verification (103 Passing Tests, 1 Skipped)
 
 The test suite runs under `pytest`:
 
@@ -231,7 +231,7 @@ pytest -v
   - Credit positive amount `CheckConstraint` (`amount_cents > 0`).
   - Unique constraint enforcement on `Credit.idempotency_key` and `EvidenceVersion(case_id, version_number)`.
   - JSON serialization of contract tiers and exemption lists.
-- **FastAPI Backend & Services (21 tests in [`backend/tests/test_api_and_services.py`](backend/tests/test_api_and_services.py)):**
+- **FastAPI Backend & Services (25 tests in [`backend/tests/test_api_and_services.py`](backend/tests/test_api_and_services.py)):**
   - Auth enforcement: Bearer token validation with `secrets.compare_digest`, 401 on missing/invalid token, 403 on viewer mutating actions.
   - Startup security: Refuses to boot in production when default demo tokens are present or when `LLM_MODE=mock`.
   - Path traversal defense: SPA catch-all verifies realpath containment against `frontend/dist`.
@@ -239,12 +239,14 @@ pytest -v
   - Evidence upload bumping version from 1 to 2, marking findings stale, and reopening resolved cases.
   - Finding review workflows: `ACCEPT`, `EDIT` (with separate text), and `REJECT`.
   - End-to-end calculation execution via API with line-item results.
-  - Credit approval: stale finding rejection (400), unreviewed finding rejection (400), line item mismatch rejection (400), ambiguous finding rejection (400), latest-review ordering (preventing ACCEPT-then-REJECT payment), idempotency 409 Conflict on repeat, and cumulative cap exhaustion (400).
+  - Credit approval: stale finding rejection (400), unreviewed finding rejection (400), line item mismatch rejection (400), ambiguous finding rejection (400), latest-review ordering (preventing ACCEPT-then-REJECT payment), idempotency 409 Conflict on repeat (preventing duplicate credit even when reason codes vary), and cumulative cap exhaustion (400).
+  - Adjustment & cap validation: `invoice_line_id` reference checks (422 on invalid, 201 on valid/case-wide), case-wide cap enforcement via latest calculation join without inflation.
+  - Investigation failure audit: FAILED runs return HTTP 200 with status=FAILED and record `INVESTIGATION_RUN_FAILED` in audit events.
 - **LangGraph Agentic Investigation (10 tests in [`backend/tests/test_agent.py`](backend/tests/test_agent.py)):**
   - Autonomous multi-node graph: gather evidence, deterministic calculation, findings synthesis, resolution formulation.
   - Injection defense with escaped `<untrusted_customer_dispute>` isolation tags and untrusted metadata wrapping.
   - Pydantic schema validation (`LLMFindingPayload`), citation verification, and narrative financial amount consistency checks.
-  - Graceful fallback: LLM transient failures yield `PARTIAL` status with fallback attribution.
+  - Fail-loud error handling: LLM transient failures yield `FAILED` status, logging `INVESTIGATION_RUN_FAILED` without producing fabricated mock findings.
 - **Concurrency Stress Test (1 test in [`backend/tests/test_concurrency.py`](backend/tests/test_concurrency.py)):**
   - Fires 10 concurrent threads simultaneously against a single overcharge line item.
   - Proves that exactly 1 thread claims the credit, 9 competing threads are rejected, and total approved credits strictly equals the eligible overcharge (zero double-crediting).

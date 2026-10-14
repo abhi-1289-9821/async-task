@@ -5,14 +5,14 @@ FastAPI endpoints to trigger and inspect LangGraph investigation runs.
 """
 
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.agent.graph import run_investigation
 from app.database import get_db
 from app.middleware.auth import AuthUser, get_current_user, require_reviewer
 from app.models.case import Case
-from app.models.investigation import InvestigationRun
+from app.models.investigation import InvestigationRun, RunStatus
 from app.schemas.investigation import InvestigationRunResponse
 
 router = APIRouter(tags=["investigations"])
@@ -25,6 +25,7 @@ router = APIRouter(tags=["investigations"])
 )
 def trigger_investigation(
     case_id: str,
+    response: Response,
     user: Annotated[AuthUser, Depends(require_reviewer)],
     db: Session = Depends(get_db),
 ):
@@ -47,6 +48,8 @@ def trigger_investigation(
         case_id=case_id,
         actor=user.identity,
     )
+    if db_run.status == RunStatus.FAILED:
+        response.status_code = status.HTTP_200_OK
     return db_run
 
 

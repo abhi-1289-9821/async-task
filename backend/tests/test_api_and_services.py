@@ -20,7 +20,8 @@ from sqlalchemy.orm import sessionmaker
 from app.main import app
 from app.config import settings
 from app.database import Base, get_db, set_sqlite_pragmas, install_append_only_triggers
-from app.models.case import Case, CaseStatus
+from app.models.case import Case, CaseStatus, CaseEvent
+from app.models.credit import Adjustment
 from app.models.invoice import InvoiceLine, ContractRule, RuleTypeDB
 from app.models.investigation import InvestigationRun, Finding, FindingReview
 from app.models.calculation import Calculation, CalculationLineResult, EngineStatusDB, FindingTypeDB
@@ -681,6 +682,20 @@ class TestCreditApprovalAndConcurrencyCap:
         assert r2.status_code == 409
         assert "Credit already approved with idempotency key" in r2.json()["detail"]
 
+        # 3. Bug 4 regression test: Changing reason code must NOT bypass duplicate protection!
+        r3 = client.post(
+            "/api/credits/approve",
+            headers=REVIEWER_HEADERS,
+            json={
+                "case_id": "case-cred-idemp",
+                "invoice_line_id": line_id,
+                "reason_code": "GOODWILL",
+                "finding_id": find_id,
+            },
+        )
+        assert r3.status_code == 409
+        assert "Credit already approved with idempotency key" in r3.json()["detail"]
+
     def test_credit_cumulative_cap_exceeded_returns_400(self, client_and_session):
         client, SessionLocal = client_and_session
         line_id, find_id = self._setup_disputed_line_with_finding(client, SessionLocal, "case-cred-cap", diff_cents=-2000)
@@ -692,7 +707,20 @@ class TestCreditApprovalAndConcurrencyCap:
             json={"action": "ACCEPT"},
         )
 
-        # Approve 1st credit with reason code R1 (exhausts the 2000 cents overcharge)
+        # Add prior adjustment on this line for 2000 cents so line cap is exhausted
+        with SessionLocal() as db:
+            db.add(
+                Adjustment(
+                    id="adj-cap-exhaust",
+                    case_id="case-cred-cap",
+                    invoice_line_id=line_id,
+                    amount_cents=2000,
+                    description="Prior adjustment",
+                )
+            )
+            db.commit()
+
+        # Attempt credit approval: line_cap = 2000 - 0 - 2000 = 0 -> returns 400
         r1 = client.post(
             "/api/credits/approve",
             headers=REVIEWER_HEADERS,
@@ -703,22 +731,8 @@ class TestCreditApprovalAndConcurrencyCap:
                 "finding_id": find_id,
             },
         )
-        assert r1.status_code == 201
-        assert r1.json()["amount_cents"] == 2000
-
-        # Attempt 2nd credit with a DIFFERENT reason code R2 (new idempotency key, but cumulative cap reached)
-        r2 = client.post(
-            "/api/credits/approve",
-            headers=REVIEWER_HEADERS,
-            json={
-                "case_id": "case-cred-cap",
-                "invoice_line_id": line_id,
-                "reason_code": "REASON_TWO",
-                "finding_id": find_id,
-            },
-        )
-        assert r2.status_code == 400
-        assert "Cumulative credit cap reached" in r2.json()["detail"]
+        assert r1.status_code == 400
+        assert "Cumulative credit cap reached" in r1.json()["detail"]
 
     def test_credit_rejected_when_invoice_line_mismatches_calculation_result(self, client_and_session):
         """Regression test: prevents credit approval when line_result.line_id != invoice_line_id."""
@@ -767,5 +781,193 @@ class TestCreditApprovalAndConcurrencyCap:
         assert res.status_code in (200, 404)
         if res.status_code == 200:
             assert "<!doctype html" in res.text.lower() or "<html" in res.text.lower()
+
+    def test_case_with_adjustments_and_line_id_validation(self, client_and_session):
+        """Regression test for Bug 1: AdjustmentCreate supports invoice_line_id and validates references."""
+        client, SessionLocal = client_and_session
+        case_payload = {
+            "id": "case-test-adj-valid",
+            "title": "Dispute with adjustments",
+            "customer_name": "Acme Corp",
+            "disputed_amount_cents": 10000,
+            "dispute_description": "Customer claims they received a prior $15 credit",
+            "invoice_lines": [
+                {
+                    "id": "line-adj-1",
+                    "description": "API requests",
+                    "original_amount_cents": 10000,
+                }
+            ],
+            "contract_rules": [
+                {
+                    "id": "rule-adj-1",
+                    "line_id": "line-adj-1",
+                    "rule_type": "PER_UNIT",
+                    "rate_cents": 10,
+                }
+            ],
+            "adjustments": [
+                {
+                    "id": "adj-1",
+                    "invoice_line_id": "line-adj-1",
+                    "amount_cents": 1500,
+                    "description": "Prior courtesy credit",
+                },
+                {
+                    "id": "adj-2",
+                    "invoice_line_id": None,
+                    "amount_cents": 500,
+                    "description": "Case-wide goodwill adjustment",
+                },
+            ],
+        }
+
+        # 1. Valid adjustments succeed
+        res = client.post("/api/cases", headers=REVIEWER_HEADERS, json=case_payload)
+        assert res.status_code == 201
+
+        # 2. GET /api/cases/{case_id} returns adjustments without 500
+        get_res = client.get("/api/cases/case-test-adj-valid", headers=REVIEWER_HEADERS)
+        assert get_res.status_code == 200
+        data = get_res.json()
+        assert len(data["adjustments"]) == 2
+        assert data["adjustments"][0]["invoice_line_id"] == "line-adj-1"
+        assert data["adjustments"][1]["invoice_line_id"] is None
+        assert data["dispute_description"] == "Customer claims they received a prior $15 credit"
+
+        # 3. Invalid adjustment referencing non-existent line ID returns 422
+        bad_payload = dict(case_payload)
+        bad_payload["id"] = "case-test-adj-invalid"
+        bad_payload["adjustments"] = [
+            {
+                "id": "adj-bad",
+                "invoice_line_id": "non-existent-line",
+                "amount_cents": 1000,
+                "description": "Bad adjustment",
+            }
+        ]
+        bad_res = client.post("/api/cases", headers=REVIEWER_HEADERS, json=bad_payload)
+        assert bad_res.status_code == 422
+        assert "references invoice_line_id" in bad_res.json()["detail"][0]["msg"]
+
+    def test_case_wide_credit_cap_enforced_via_latest_calculation_join(self, client_and_session):
+        """Regression test for Bug 2: credit_service joins Calculation and isolates latest calculation."""
+        client, SessionLocal = client_and_session
+        line_id, find_id = self._setup_disputed_line_with_finding(
+            client, SessionLocal, "case-cred-casewide", diff_cents=-3000
+        )
+
+        # Accept finding
+        client.post(f"/api/findings/{find_id}/review", headers=REVIEWER_HEADERS, json={"action": "ACCEPT"})
+
+        # Add a case-wide adjustment of 1000 cents
+        with SessionLocal() as db:
+            db.add(
+                Adjustment(
+                    id="adj-casewide-1",
+                    case_id="case-cred-casewide",
+                    invoice_line_id=None,
+                    amount_cents=1000,
+                    description="Case-wide goodwill",
+                )
+            )
+            # Add older calculation to verify join and latest calculation filtering
+            calc_old = Calculation(
+                id="calc-old-discarded",
+                case_id="case-cred-casewide",
+                evidence_version=1,
+                engine_status=EngineStatusDB.OK,
+                total_original_billed_cents=5000,
+                total_recalculated_cents=2000,
+                total_difference_cents=-3000,
+                result_hash="hash_old",
+            )
+            db.add(calc_old)
+            db.flush()
+            db.add(
+                CalculationLineResult(
+                    id=9999,
+                    calculation_id=calc_old.id,
+                    line_id=line_id,
+                    result_id="res_old_1234567890abcdef",
+                    rule_id="rule-test",
+                    original_amount_cents=5000,
+                    recalculated_amount_cents=2000,
+                    difference_cents=-3000,
+                    finding_type=FindingTypeDB.CONFIRMED_CALCULATION_DISCREPANCY,
+                    quantity_used=10.0,
+                    exempt_quantity=0.0,
+                    explanation="Old calculation",
+                )
+            )
+            db.commit()
+
+        # Total case overcharge from latest calculation is 3000.
+        # Case wide adjustment is 1000.
+        # Case cap = 3000 - 0 - 1000 = 2000 cents.
+        # Remaining cap is min(line_cap=3000, case_cap=2000) = 2000.
+        # Credit approval will cap amount at 2000 cents.
+        res = client.post(
+            "/api/credits/approve",
+            headers=REVIEWER_HEADERS,
+            json={
+                "case_id": "case-cred-casewide",
+                "invoice_line_id": line_id,
+                "reason_code": "RATE_ERROR",
+                "finding_id": find_id,
+            },
+        )
+        assert res.status_code == 201
+        assert res.json()["amount_cents"] == 2000
+
+    def test_failed_investigation_run_writes_audit_event_and_returns_status_failed(
+        self, client_and_session, monkeypatch
+    ):
+        """Regression test for Bug 5: FAILED run writes INVESTIGATION_RUN_FAILED event and returns 200 OK."""
+        client, SessionLocal = client_and_session
+        # Setup case with invoice line and contract rule so gather_evidence proceeds to LLM
+        client.post(
+            "/api/cases",
+            headers=REVIEWER_HEADERS,
+            json={
+                "id": "case-investigate-fail",
+                "title": "Failing Case",
+                "customer_name": "Acme Inc",
+                "disputed_amount_cents": 5000,
+                "invoice_lines": [
+                    {"id": "line-fail-1", "description": "API requests", "original_amount_cents": 5000}
+                ],
+                "contract_rules": [
+                    {
+                        "id": "rule-fail-1",
+                        "line_id": "line-fail-1",
+                        "rule_type": "PER_UNIT",
+                        "rate_cents": 10,
+                    }
+                ],
+            },
+        )
+
+        from app.agent import llm_client
+
+        def mock_failing_investigate(*args, **kwargs):
+            raise RuntimeError("Simulated upstream Gemini API connection failure")
+
+        monkeypatch.setattr(llm_client, "generate_investigation_findings", mock_failing_investigate)
+
+        res = client.post(
+            "/api/cases/case-investigate-fail/investigations",
+            headers=REVIEWER_HEADERS,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "FAILED"
+        assert "Simulated upstream Gemini API connection failure" in data["status_reason"]
+
+        with SessionLocal() as db:
+            events = db.query(CaseEvent).filter(CaseEvent.case_id == "case-investigate-fail").all()
+            event_types = [e.event_type for e in events]
+            assert "INVESTIGATION_RUN_FAILED" in event_types
+
 
 

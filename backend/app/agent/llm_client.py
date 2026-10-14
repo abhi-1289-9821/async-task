@@ -111,6 +111,13 @@ def _mock_analysis(prompt: str, state: dict[str, Any]) -> dict[str, Any]:
         diff_cents = target.get("difference_cents", 0)
         orig_cents = target.get("original_amount_cents", 0)
         recalc_cents = target.get("recalculated_amount_cents", 0)
+        target_line_id = target.get("line_id")
+        matching_rules = [r.get("id") for r in state.get("contract_rules", []) if r.get("line_id") == target_line_id]
+        c_ids = [target.get("result_id")]
+        if target_line_id:
+            c_ids.append(target_line_id)
+        if matching_rules:
+            c_ids.extend(matching_rules)
         return {
             "finding_type": "CONFIRMED_CALCULATION_DISCREPANCY",
             "summary_narrative": (
@@ -132,7 +139,7 @@ def _mock_analysis(prompt: str, state: dict[str, Any]) -> dict[str, Any]:
             ],
             "open_questions": [],
             "missing_evidence_questions": [],
-            "citation_ids": [target.get("result_id")],
+            "citation_ids": c_ids,
             "calculation_line_result_id": target.get("id"),
         }
 

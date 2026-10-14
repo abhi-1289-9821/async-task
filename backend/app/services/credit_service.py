@@ -31,21 +31,25 @@ from sqlalchemy.orm import Session
 from app.models.case import Case, CaseEvent
 from app.models.invoice import InvoiceLine
 from app.models.investigation import Finding, FindingReview, ResolutionOption
-from app.models.calculation import CalculationLineResult
+from app.models.calculation import Calculation, CalculationLineResult
 from app.models.credit import Credit, Adjustment
 
 
 def generate_idempotency_key(
     case_id: str,
     invoice_line_id: str,
-    reason_code: str,
+    reason_code: Optional[str] = None,
     custom_key: Optional[str] = None,
     finding_id: Optional[str] = None,
 ) -> str:
-    """Computes SHA-256 idempotency key or returns client-provided key."""
+    """
+    Computes SHA-256 idempotency key anchored strictly to (case_id, invoice_line_id, finding_id).
+    reason_code is intentionally omitted from the hash payload to prevent bypassing
+    duplicate credit protection by simply submitting under a different reason code.
+    """
     if custom_key:
         return custom_key
-    payload = f"{case_id}:{invoice_line_id}:{finding_id or ''}:{reason_code}"
+    payload = f"{case_id}:{invoice_line_id}:{finding_id or ''}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -112,7 +116,11 @@ def approve_credit(
 
     # ── 2. Idempotency Check ────────────────────────────────────────────────────
     idempotency_key = generate_idempotency_key(
-        case_id, invoice_line_id, reason_code, client_idempotency_key, finding_id
+        case_id=case_id,
+        invoice_line_id=invoice_line_id,
+        reason_code=reason_code,
+        custom_key=client_idempotency_key,
+        finding_id=finding_id,
     )
     existing_credit = db.query(Credit).filter(Credit.idempotency_key == idempotency_key).first()
     if existing_credit:
@@ -256,10 +264,21 @@ def approve_credit(
             .filter(Credit.case_id == case_id)
             .scalar()
         )
+        # Total case overcharge from the latest calculation for this case
+        # Join through Calculation to filter by case_id and prevent multiple calculation inflation
+        latest_calc = (
+            db.query(Calculation)
+            .filter(Calculation.case_id == case_id)
+            .order_by(Calculation.created_at.desc(), Calculation.id.desc())
+            .first()
+        )
+        calc_id = latest_calc.id if latest_calc else line_result.calculation_id
         total_case_overcharge = (
             db.query(func.coalesce(func.sum(func.abs(CalculationLineResult.difference_cents)), 0))
+            .join(Calculation, Calculation.id == CalculationLineResult.calculation_id)
             .filter(
-                CalculationLineResult.case_id == case_id,
+                Calculation.id == calc_id,
+                Calculation.case_id == case_id,
                 CalculationLineResult.difference_cents < 0,
             )
             .scalar()

@@ -9,6 +9,7 @@ Enforces deterministic gates:
 """
 
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -20,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.agent import llm_client, validator
 from app.agent.state import AgentState
+from app.logging import log_agent_node_execution
 from app.models.case import Case, CaseEvent
 from app.models.invoice import ContractRule, InvoiceLine
 from app.models.usage import UsageEvent
@@ -84,9 +86,17 @@ class InvestigationWorkflow:
     # ── Nodes ─────────────────────────────────────────────────────────────────
     def gather_evidence_node(self, state: AgentState) -> dict[str, Any]:
         """Loads all evidence from DB. If required data is missing, marks BLOCKED."""
+        start_t = time.perf_counter()
         case_id = state["case_id"]
         case = self.db.query(Case).filter(Case.id == case_id).one_or_none()
         if not case:
+            log_agent_node_execution(
+                run_id=state["run_id"],
+                case_id=case_id,
+                node="gather_evidence",
+                latency_ms=(time.perf_counter() - start_t) * 1000,
+                status="FAILED",
+            )
             return {
                 "status": "FAILED",
                 "status_reason": f"Case '{case_id}' not found",
@@ -99,6 +109,13 @@ class InvestigationWorkflow:
 
         # Gate: If no invoice lines or no contract rules, cannot calculate
         if not lines or not rules:
+            log_agent_node_execution(
+                run_id=state["run_id"],
+                case_id=case_id,
+                node="gather_evidence",
+                latency_ms=(time.perf_counter() - start_t) * 1000,
+                status="BLOCKED",
+            )
             return {
                 "status": "BLOCKED",
                 "status_reason": "MISSING_EVIDENCE: Case requires both invoice lines and contract rules to investigate",
@@ -116,6 +133,14 @@ class InvestigationWorkflow:
                 "adjustments": [],
             }
 
+        log_agent_node_execution(
+            run_id=state["run_id"],
+            case_id=case_id,
+            node="gather_evidence",
+            latency_ms=(time.perf_counter() - start_t) * 1000,
+            status="RUNNING",
+            details={"lines_count": len(lines), "rules_count": len(rules), "events_count": len(events)},
+        )
         return {
             "status": "RUNNING",
             "evidence_version": case.evidence_version,
@@ -124,8 +149,9 @@ class InvestigationWorkflow:
                 "title": case.title,
                 "customer_name": case.customer_name,
                 "disputed_amount_cents": case.disputed_amount_cents,
+                "dispute_description": case.dispute_description,
             },
-            "dispute_text": f"{case.title}. Customer: {case.customer_name}.",
+            "dispute_text": case.dispute_description or f"{case.title}. Customer: {case.customer_name}.",
             "invoice_lines": [
                 {"id": l.id, "description": l.description, "original_amount_cents": l.original_amount_cents}
                 for l in lines
@@ -162,6 +188,7 @@ class InvestigationWorkflow:
 
     def run_calculation_node(self, state: AgentState) -> dict[str, Any]:
         """Invokes the deterministic calculation engine."""
+        start_t = time.perf_counter()
         calc = execute_case_calculation(
             db=self.db,
             case_id=state["case_id"],
@@ -184,6 +211,15 @@ class InvestigationWorkflow:
             })
             valid_result_ids.append(lr.result_id)
 
+        log_agent_node_execution(
+            run_id=state["run_id"],
+            case_id=state["case_id"],
+            node="run_calculation",
+            latency_ms=(time.perf_counter() - start_t) * 1000,
+            status=calc.engine_status.value,
+            details={"diff_cents": calc.total_difference_cents, "lines_count": len(line_results)},
+        )
+
         return {
             "calculation_id": calc.id,
             "calculation_status": calc.engine_status.value,
@@ -198,12 +234,21 @@ class InvestigationWorkflow:
 
     def analyze_findings_node(self, state: AgentState) -> dict[str, Any]:
         """Calls LLM Call 1 to produce structured investigation findings."""
+        start_t = time.perf_counter()
         finding_dict, tokens = llm_client.generate_investigation_findings(state)
         token_usage = state.get("token_usage", {})
         for k, v in tokens.items():
             token_usage[k] = token_usage.get(k, 0) + v
 
         llm_fallback = (finding_dict.get("generation_path") == "fallback_mock")
+        log_agent_node_execution(
+            run_id=state["run_id"],
+            case_id=state["case_id"],
+            node="analyze_findings",
+            latency_ms=(time.perf_counter() - start_t) * 1000,
+            status=finding_dict.get("finding_type", "UNRESOLVED"),
+            token_usage=tokens,
+        )
         return {
             "raw_findings": [finding_dict],
             "token_usage": token_usage,
@@ -212,6 +257,7 @@ class InvestigationWorkflow:
 
     def formulate_options_node(self, state: AgentState) -> dict[str, Any]:
         """Calls LLM Call 2 to formulate resolution options."""
+        start_t = time.perf_counter()
         raw_findings = state.get("raw_findings", [])
         primary_finding = raw_findings[0] if raw_findings else {}
         options_list, tokens = llm_client.generate_resolution_options(state, primary_finding)
@@ -220,6 +266,16 @@ class InvestigationWorkflow:
         for k, v in tokens.items():
             token_usage[k] = token_usage.get(k, 0) + v
 
+        log_agent_node_execution(
+            run_id=state["run_id"],
+            case_id=state["case_id"],
+            node="formulate_options",
+            latency_ms=(time.perf_counter() - start_t) * 1000,
+            status="OK",
+            token_usage=tokens,
+            details={"options_count": len(options_list)},
+        )
+
         return {
             "raw_options": options_list,
             "token_usage": token_usage,
@@ -227,8 +283,14 @@ class InvestigationWorkflow:
 
     def validate_and_sanitize_node(self, state: AgentState) -> dict[str, Any]:
         """Applies schema validation, citation validation, consistency checks, and option sanitization."""
+        start_t = time.perf_counter()
         raw_findings = state.get("raw_findings", [])
         valid_result_ids = state.get("valid_result_ids", [])
+        valid_line_ids = [l.get("id") for l in state.get("invoice_lines", []) if l.get("id")]
+        valid_rule_ids = [r.get("id") for r in state.get("contract_rules", []) if r.get("id")]
+        valid_usage_ids = [e.get("id") for e in state.get("usage_events", []) if e.get("id")]
+        all_valid_citations = list(set(valid_result_ids + valid_line_ids + valid_rule_ids + valid_usage_ids))
+
         calc_status = state.get("calculation_status", "OK")
         total_diff = state.get("total_difference_cents", 0)
         line_results = state.get("line_results", [])
@@ -238,9 +300,9 @@ class InvestigationWorkflow:
             # 0. Validate raw LLM JSON schema & line result ID against this run
             payload_passed, sanitized_rf, p_errs = validator.validate_llm_payload(rf, line_results)
 
-            # 1. Validate citations
+            # 1. Validate rich citations (result IDs, line IDs, rule IDs, usage event IDs)
             citation_passed, sanitized_citations, c_errs = validator.validate_citations(
-                sanitized_rf, valid_result_ids
+                sanitized_rf, all_valid_citations
             )
             # 2. Consistency check
             consist_passed, final_finding_type, con_errs = validator.validate_consistency(
@@ -279,6 +341,14 @@ class InvestigationWorkflow:
             status_val = "PARTIAL"
             status_reason = "LLM analysis failed or unconfigured; deterministic fallback applied"
 
+        log_agent_node_execution(
+            run_id=state["run_id"],
+            case_id=state["case_id"],
+            node="validate_and_sanitize",
+            latency_ms=(time.perf_counter() - start_t) * 1000,
+            status=status_val,
+        )
+
         return {
             "validated_findings": validated_findings,
             "validated_options": validated_options,
@@ -288,6 +358,7 @@ class InvestigationWorkflow:
 
     def persist_results_node(self, state: AgentState) -> dict[str, Any]:
         """Persists the InvestigationRun, Findings, and ResolutionOptions to DB."""
+        start_t = time.perf_counter()
         run_id = state["run_id"]
         status_val = state.get("status", "COMPLETED")
 
@@ -386,8 +457,17 @@ class InvestigationWorkflow:
             correlation_id=state.get("correlation_id"),
         )
         self.db.add(audit_event)
-
         self.db.commit()
+
+        log_agent_node_execution(
+            run_id=run_id,
+            case_id=state["case_id"],
+            node="persist_results",
+            latency_ms=(time.perf_counter() - start_t) * 1000,
+            status=status_val,
+            token_usage=state.get("token_usage"),
+            details={"findings_count": len(db_findings), "options_count": len(db_options)},
+        )
         return {"status": "COMPLETED"}
 
 
@@ -433,6 +513,18 @@ def run_investigation(
                 completed_at=datetime.now(timezone.utc),
             )
             db.add(failed_run)
+            failed_event = CaseEvent(
+                case_id=case_id,
+                event_type="INVESTIGATION_RUN_FAILED",
+                actor=actor,
+                details={
+                    "run_id": run_id,
+                    "error": str(e),
+                    "evidence_version": evidence_version,
+                },
+                correlation_id=correlation_id,
+            )
+            db.add(failed_event)
             db.commit()
         return failed_run
 

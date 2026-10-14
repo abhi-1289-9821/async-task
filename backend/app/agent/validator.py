@@ -73,7 +73,8 @@ def validate_citations(
     valid_result_ids: list[str],
 ) -> tuple[bool, list[str], list[str]]:
     """
-    Validates that all citation_ids in the finding match existing engine result_ids.
+    Validates that all citation_ids in the finding match valid evidence identifiers
+    (calculation result_ids, invoice line_ids, contract rule_ids, or usage event_ids).
     Returns (passed, sanitized_citation_ids, error_messages).
     """
     citations = finding.get("citation_ids") or []
@@ -89,7 +90,7 @@ def validate_citations(
         if c_str in valid_set:
             sanitized.append(c_str)
         else:
-            errors.append(f"Invalid citation ID '{c_str}'; not found in calculation line results")
+            errors.append(f"Invalid citation ID '{c_str}'; not found in calculation line results or evidence")
 
     passed = (len(errors) == 0) and (len(sanitized) > 0 or len(valid_set) == 0)
     return passed, sanitized, errors

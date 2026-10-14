@@ -43,6 +43,7 @@ def create_case(
         title=payload.title,
         customer_name=payload.customer_name,
         disputed_amount_cents=payload.disputed_amount_cents,
+        dispute_description=payload.dispute_description,
         status=CaseStatus.OPEN.value,
         evidence_version=1,
     )

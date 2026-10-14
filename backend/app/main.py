@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import create_all_tables
+from app.logging import StructuredLoggingMiddleware, setup_structured_logging
 from app.routers import (
     cases_router,
     evidence_router,
@@ -22,6 +23,9 @@ from app.routers import (
     credits_router,
     investigations_router,
 )
+
+# Initialize structured JSON logging
+setup_structured_logging()
 
 
 @asynccontextmanager
@@ -37,6 +41,8 @@ app = FastAPI(
     version=settings.app_version,
     lifespan=lifespan,
 )
+
+app.add_middleware(StructuredLoggingMiddleware)
 
 # CORS configuration
 configured_origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]

@@ -74,6 +74,7 @@ class ContractRuleCreate(BaseModel):
 
 class AdjustmentCreate(BaseModel):
     id: str = Field(..., min_length=1, max_length=36)
+    invoice_line_id: Optional[str] = Field(None, min_length=1, max_length=36)
     amount_cents: int = Field(..., ge=0)
     description: str = Field(..., min_length=1)
     applied_at: Optional[datetime] = None
@@ -84,6 +85,7 @@ class CaseCreate(BaseModel):
     title: str = Field(..., min_length=3, max_length=255)
     customer_name: str = Field(..., min_length=1, max_length=100)
     disputed_amount_cents: int = Field(..., ge=0)
+    dispute_description: Optional[str] = Field(None, max_length=5000)
     invoice_lines: list[InvoiceLineCreate] = Field(default_factory=list)
     contract_rules: list[ContractRuleCreate] = Field(default_factory=list)
     adjustments: list[AdjustmentCreate] = Field(default_factory=list)
@@ -95,6 +97,11 @@ class CaseCreate(BaseModel):
             if r.line_id not in line_ids:
                 raise ValueError(
                     f"Contract rule '{r.id}' references line_id '{r.line_id}' which does not exist in invoice_lines"
+                )
+        for adj in self.adjustments:
+            if adj.invoice_line_id is not None and adj.invoice_line_id not in line_ids:
+                raise ValueError(
+                    f"Adjustment '{adj.id}' references invoice_line_id '{adj.invoice_line_id}' which does not exist in invoice_lines"
                 )
         return self
 
@@ -148,6 +155,7 @@ class AdjustmentResponse(BaseModel):
 
     id: str
     case_id: str
+    invoice_line_id: Optional[str] = None
     amount_cents: int
     description: str
     applied_at: Optional[datetime] = None
@@ -161,6 +169,7 @@ class CaseResponse(BaseModel):
     title: str
     customer_name: str
     disputed_amount_cents: int
+    dispute_description: Optional[str] = None
     status: CaseStatus
     evidence_version: int
     created_at: datetime

@@ -63,15 +63,31 @@ def test_startup_autoseed_creates_three_cases(temp_db):
 
     # First app startup
     with TestClient(app) as client:
-        # 1. Exactly 3 cases exist
+        # 1. Seeded cases exist
         res = client.get("/api/cases", headers=REVIEWER_HEADERS)
         assert res.status_code == 200, res.text
         cases = res.json()
-        assert len(cases) == 3
+        assert len(cases) >= 5
         case_ids = {c["id"] for c in cases}
-        assert case_ids == {"case-acme-101", "case-bravo-102", "case-delta-103"}
+        assert {"case-acme-unverified", "case-acme-verified", "case-acme-101", "case-bravo-102", "case-delta-103"}.issubset(case_ids)
 
-        # 2. Case Bravo (case-bravo-102) -> AMBIGUOUS with two interpretations
+        # 2. Case Acme Unverified (Scenario A) -> INSUFFICIENT_DATA, recalculated amount is None
+        res_acme_a = client.post("/api/calculations/run", json={"case_id": "case-acme-unverified"}, headers=REVIEWER_HEADERS)
+        assert res_acme_a.status_code == 201, res_acme_a.text
+        calc_acme_a = res_acme_a.json()
+        assert calc_acme_a["engine_status"] == "INSUFFICIENT_DATA"
+        assert calc_acme_a["total_recalculated_cents"] is None
+        assert calc_acme_a["total_difference_cents"] is None
+
+        # 3. Case Acme Verified (Scenario B) -> Recalculates to $490 (49000 cents), difference -$1360 (-136000 cents)
+        res_acme_b = client.post("/api/calculations/run", json={"case_id": "case-acme-verified"}, headers=REVIEWER_HEADERS)
+        assert res_acme_b.status_code == 201, res_acme_b.text
+        calc_acme_b = res_acme_b.json()
+        assert calc_acme_b["engine_status"] == "OK"
+        assert calc_acme_b["total_recalculated_cents"] == 49000
+        assert calc_acme_b["total_difference_cents"] == -136000
+
+        # 4. Case Bravo (case-bravo-102) -> AMBIGUOUS with two interpretations
         res_bravo = client.post("/api/calculations/run", json={"case_id": "case-bravo-102"}, headers=REVIEWER_HEADERS)
         assert res_bravo.status_code == 201, res_bravo.text
         calc_bravo = res_bravo.json()
@@ -83,7 +99,7 @@ def test_startup_autoseed_creates_three_cases(temp_db):
         assert "graduated" in interp_ids
         assert "volume" in interp_ids
 
-        # 3. Case Acme (case-acme-101) -> CONFIRMED discrepancy
+        # 5. Case Acme (case-acme-101) -> CONFIRMED discrepancy
         res_acme = client.post("/api/calculations/run", json={"case_id": "case-acme-101"}, headers=REVIEWER_HEADERS)
         assert res_acme.status_code == 201, res_acme.text
         calc_acme = res_acme.json()
@@ -91,11 +107,10 @@ def test_startup_autoseed_creates_three_cases(temp_db):
         assert len(calc_acme["line_results"]) >= 1
         acme_line = calc_acme["line_results"][0]
         assert acme_line["finding_type"] == "CONFIRMED_CALCULATION_DISCREPANCY"
-        # difference_cents is negative (overcharge): original 5000 - recalc 2500 = -2500
         assert acme_line["difference_cents"] < 0
         assert acme_line["recalculated_amount_cents"] == 2500
 
-        # 4. Case Delta (case-delta-103) -> NO_DISCREPANCY
+        # 6. Case Delta (case-delta-103) -> NO_DISCREPANCY
         res_delta = client.post("/api/calculations/run", json={"case_id": "case-delta-103"}, headers=REVIEWER_HEADERS)
         assert res_delta.status_code == 201, res_delta.text
         calc_delta = res_delta.json()
@@ -105,12 +120,12 @@ def test_startup_autoseed_creates_three_cases(temp_db):
         assert delta_line["finding_type"] == "NO_DISCREPANCY"
         assert delta_line["difference_cents"] == 0
 
-    # 5. Second app start does not duplicate cases (idempotent)
+    # 7. Second app start does not duplicate cases (idempotent)
     with TestClient(app) as client2:
         res2 = client2.get("/api/cases", headers=REVIEWER_HEADERS)
         assert res2.status_code == 200
         cases2 = res2.json()
-        assert len(cases2) == 3
+        assert len(cases2) == len(cases)
 
 
 def test_seed_failure_logged_and_does_not_crash_startup(temp_db, monkeypatch, caplog):

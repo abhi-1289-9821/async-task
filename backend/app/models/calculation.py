@@ -66,8 +66,8 @@ class Calculation(Base):
     )
     engine_status_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     total_original_billed_cents: Mapped[int] = mapped_column(Integer, nullable=False)
-    total_recalculated_cents: Mapped[int] = mapped_column(Integer, nullable=False)
-    total_difference_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_recalculated_cents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_difference_cents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     quarantined_events: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
@@ -96,8 +96,8 @@ class CalculationLineResult(Base):
     result_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)  # "res_" + 16 hex chars
     rule_id: Mapped[str] = mapped_column(String(36), nullable=False)
     original_amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
-    recalculated_amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
-    difference_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    recalculated_amount_cents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    difference_cents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     finding_type: Mapped[str] = mapped_column(
         Enum(FindingTypeDB, name="finding_type_db_enum", create_constraint=True), nullable=False
     )
@@ -109,6 +109,7 @@ class CalculationLineResult(Base):
     assumptions: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
     quarantined_events: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    undisputed_overcharge_cents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     calculation: Mapped["Calculation"] = relationship(back_populates="line_results")
     resolution_options: Mapped[list["ResolutionOption"]] = relationship(  # noqa: F821

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Eye, ShieldCheck, Activity, Cpu, Key, AlertCircle } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Eye, ShieldCheck, Activity, Key, AlertCircle, X, Trash2, Sun, Moon } from 'lucide-react';
 import { getActiveRole, setActiveRole, checkHealth, getToken, setCustomToken, hasUserSavedToken } from '../api/client';
 
 export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
@@ -8,7 +9,28 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
   const [showTokenModal, setShowTokenModal] = useState(false);
   const [tokenInput, setTokenInput] = useState('');
   const [authRequiredPrompt, setAuthRequiredPrompt] = useState(false);
+  const [theme, setTheme] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('fairbill_theme');
+      if (saved) return saved;
+      if (typeof window.matchMedia === 'function') {
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+    }
+    return 'light';
+  });
   const modalRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem('fairbill_theme', theme);
+    }
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
 
   useEffect(() => {
     checkHealth()
@@ -80,30 +102,29 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
         type="button"
         className="navbar-brand" 
         onClick={() => onSelectCase(null)}
-        style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0 }}
         aria-label="FairBill Home"
       >
-        <div className="brand-icon">
-          <Cpu size={22} />
-        </div>
-        <div>
-          <div className="brand-title">FairBill</div>
-          <div className="brand-subtitle">Autonomous Billing Audit & Governance</div>
-        </div>
+        <span className="brand-wordmark">FairBill</span>
+        <span className="brand-dek">Audit & Governance</span>
       </button>
 
       <div className="navbar-actions">
         {/* API Health indicator */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: isHealthy ? '#34d399' : '#f87171' }}>
-          <Activity size={14} className={isHealthy ? 'pulse' : ''} />
-          <span>{isHealthy ? 'API Online' : 'API Disconnected'}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: isHealthy ? 'var(--status-green)' : 'var(--status-rust)' }}>
+          <Activity size={13} />
+          <span>{isHealthy ? 'API Online' : 'API Offline'}</span>
         </div>
 
         {/* Token Management */}
         <button
           type="button"
           className="role-pill-btn"
-          style={{ borderColor: isTokenActive ? '#34d399' : '#f59e0b', color: isTokenActive ? '#34d399' : '#f59e0b' }}
+          style={{ 
+            borderColor: isTokenActive ? 'var(--status-green-border)' : 'var(--line)', 
+            color: isTokenActive ? 'var(--status-green)' : 'var(--ink-secondary)',
+            background: isTokenActive ? 'var(--status-green-bg)' : 'transparent',
+            border: '1px solid'
+          }}
           onClick={openTokenModal}
           title="Configure personal Bearer token (never stored in bundle)"
         >
@@ -130,9 +151,20 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
             <span>Viewer (Read-Only)</span>
           </button>
         </div>
+
+        {/* Theme Toggle Button */}
+        <button
+          type="button"
+          className="theme-toggle-btn"
+          onClick={toggleTheme}
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+        >
+          {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+        </button>
       </div>
 
-      {showTokenModal && (
+      {showTokenModal && typeof document !== 'undefined' && createPortal(
         <div 
           className="modal-overlay" 
           onClick={() => setShowTokenModal(false)}
@@ -147,11 +179,32 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <Key size={18} color="#38bdf8" />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                <div style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'rgba(56, 189, 248, 0.12)',
+                  border: '1px solid rgba(56, 189, 248, 0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <Key size={16} color="#38bdf8" />
+                </div>
                 <h3 id="token-modal-title" className="modal-title">Configure {role} Session Token</h3>
               </div>
+              <button
+                type="button"
+                onClick={() => setShowTokenModal(false)}
+                className="btn btn-secondary btn-sm"
+                aria-label="Close dialog"
+                style={{ borderRadius: '50%', width: 30, height: 30, padding: 0 }}
+              >
+                <X size={15} />
+              </button>
             </div>
+
             <div className="modal-body">
               {authRequiredPrompt && (
                 <div style={{
@@ -167,53 +220,99 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
                   color: '#fca5a5'
                 }}>
                   <AlertCircle size={16} color="var(--accent-rose)" />
-                  <strong>Enter your token:</strong> Authentication failed (401). Please enter a valid token.
+                  <div><strong>Enter your token:</strong> Authentication failed (401). Please enter a valid token.</div>
                 </div>
               )}
-              <p style={{ fontSize: '0.82rem', color: '#94a3b8', marginBottom: '1rem', lineHeight: '1.4' }}>
+              <p style={{ fontSize: '0.82rem', color: '#94a3b8', marginBottom: '1.25rem', lineHeight: '1.5' }}>
                 Bearer tokens authenticate reviewer and viewer actions. Tokens are stored only in your local browser session and are never baked into client code bundles.
               </p>
-              <div className="form-group">
-                <label htmlFor="personal-bearer-token-input" className="form-label">Personal Bearer Token</label>
-                <input
-                  id="personal-bearer-token-input"
-                  type="text"
-                  className="form-input"
-                  placeholder={`Enter ${role.toLowerCase()} token...`}
-                  value={tokenInput}
-                  onChange={(e) => setTokenInput(e.target.value)}
-                  autoFocus
-                />
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label htmlFor="personal-bearer-token-input" className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Personal Bearer Token</span>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--accent-cyan)', fontWeight: 500 }}>
+                    Default: {role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026'}
+                  </span>
+                </label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    id="personal-bearer-token-input"
+                    type="text"
+                    className="form-input"
+                    style={{ paddingRight: tokenInput ? '2.5rem' : '0.85rem' }}
+                    placeholder={`Enter ${role.toLowerCase()} token...`}
+                    value={tokenInput}
+                    onChange={(e) => setTokenInput(e.target.value)}
+                    autoFocus
+                  />
+                  {tokenInput && (
+                    <button
+                      type="button"
+                      onClick={() => setTokenInput('')}
+                      aria-label="Clear input text"
+                      title="Clear input"
+                      style={{
+                        position: 'absolute',
+                        right: '0.6rem',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        padding: '0.2rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '4px'
+                      }}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+            </div>
+
+            <div className="modal-footer">
+              <div>
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', color: '#f87171' }}
+                  style={{ 
+                    fontSize: '0.8rem', 
+                    padding: '0.5rem 0.85rem', 
+                    color: '#f87171',
+                    borderColor: 'rgba(248, 113, 113, 0.25)',
+                    background: 'rgba(248, 113, 113, 0.06)'
+                  }}
                   onClick={() => setTokenInput('')}
+                  disabled={!tokenInput}
                 >
-                  Clear Token
+                  <Trash2 size={13} />
+                  <span>Clear Token</span>
+                </button>
+              </div>
+              <div className="modal-footer-end">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowTokenModal(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleSaveToken}
+                >
+                  Save Token
                 </button>
               </div>
             </div>
-            <div className="modal-footer">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => setShowTokenModal(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={handleSaveToken}
-              >
-                Save Token
-              </button>
-            </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </header>
   );

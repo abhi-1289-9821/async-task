@@ -54,6 +54,12 @@ def review_finding(
     if not finding:
         raise HTTPException(status_code=404, detail=f"Finding '{id}' not found")
 
+    if finding.is_stale:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Finding '{id}' is stale due to new evidence ({finding.stale_reason or 'evidence changed'}). Re-run the investigation before submitting a review.",
+        )
+
     if payload.action == "EDIT" and not payload.edited_text:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

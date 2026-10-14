@@ -4,8 +4,10 @@ routers/cases.py
 Endpoints for Case CRUD, status transitions, and audit events.
 """
 
+import hashlib
+import json
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -14,6 +16,7 @@ from app.middleware.auth import AuthUser, get_current_user, require_reviewer
 from app.models.case import Case, CaseEvent, CaseStatus
 from app.models.invoice import InvoiceLine, ContractRule
 from app.models.credit import Adjustment
+from app.models.usage import UsageEvent, EvidenceVersion
 from app.schemas.case import (
     CaseCreate,
     CaseResponse,
@@ -42,6 +45,10 @@ def create_case(
         id=case_id,
         title=payload.title,
         customer_name=payload.customer_name,
+        invoice_id=payload.invoice_id,
+        currency=payload.currency or "USD",
+        claimed_usage_quantity=payload.claimed_usage_quantity,
+        claimed_usage_uom=payload.claimed_usage_uom,
         disputed_amount_cents=payload.disputed_amount_cents,
         dispute_description=payload.dispute_description,
         period_start=payload.period_start,
@@ -53,6 +60,7 @@ def create_case(
     db.flush()
 
     # Add invoice lines
+    created_lines = []
     for line in payload.invoice_lines:
         db_line = InvoiceLine(
             id=line.id,
@@ -61,9 +69,11 @@ def create_case(
             original_amount_cents=line.original_amount_cents,
         )
         db.add(db_line)
+        created_lines.append(db_line)
     db.flush()
 
     # Add contract rules
+    created_rules = []
     for rule in payload.contract_rules:
         tiers_data = [t.model_dump() for t in rule.tiers] if rule.tiers else None
         db_rule = ContractRule(
@@ -80,6 +90,7 @@ def create_case(
             exempt_environments=rule.exempt_environments,
         )
         db.add(db_rule)
+        created_rules.append(db_rule)
     db.flush()
 
     # Add prior adjustments
@@ -91,8 +102,44 @@ def create_case(
             amount_cents=adj.amount_cents,
             description=adj.description,
             applied_at=adj.applied_at,
+            is_verified=adj.is_verified,
+            evidence_source=adj.evidence_source,
         )
         db.add(db_adj)
+
+    # Add initial usage events if provided
+    created_events = []
+    for ev in payload.usage_events:
+        ev_id = ev.id or f"ev_{uuid.uuid4().hex[:12]}"
+        db_ev = UsageEvent(
+            id=ev_id,
+            case_id=case_id,
+            line_id=ev.line_id,
+            quantity=ev.quantity,
+            environment=ev.environment or "production",
+            event_timestamp=ev.event_timestamp or payload.period_start,
+        )
+        db.add(db_ev)
+        created_events.append(db_ev)
+    db.flush()
+
+    # Create initial EvidenceVersion snapshot (version 1)
+    content_payload = json.dumps(
+        {
+            "lines": sorted([{"id": l.id, "original_amount_cents": l.original_amount_cents} for l in created_lines], key=lambda x: x["id"]),
+            "rules": sorted([{"id": r.id, "rule_type": str(r.rule_type), "rate_cents": r.rate_cents} for r in created_rules], key=lambda x: x["id"]),
+            "events": sorted([{"id": e.id, "quantity": float(e.quantity), "environment": e.environment} for e in created_events], key=lambda x: x["id"]),
+        },
+        sort_keys=True,
+    )
+    content_hash = hashlib.sha256(content_payload.encode()).hexdigest()
+    ev_version = EvidenceVersion(
+        case_id=case_id,
+        version_number=1,
+        content_hash=content_hash,
+        created_by=user.identity,
+    )
+    db.add(ev_version)
 
     # Audit event
     event = CaseEvent(
@@ -104,6 +151,7 @@ def create_case(
             "disputed_amount_cents": payload.disputed_amount_cents,
             "lines_count": len(payload.invoice_lines),
             "rules_count": len(payload.contract_rules),
+            "events_count": len(payload.usage_events),
         },
     )
     db.add(event)
@@ -178,3 +226,17 @@ def get_case_events(
         raise HTTPException(status_code=404, detail=f"Case '{id}' not found")
 
     return db.query(CaseEvent).filter(CaseEvent.case_id == id).order_by(CaseEvent.id.asc()).all()
+
+
+@router.post("/reset-demo", response_model=dict[str, Any])
+def reset_demo_cases_endpoint(
+    user: Annotated[AuthUser, Depends(require_reviewer)],
+    db: Session = Depends(get_db),
+):
+    """
+    Explicit reset mechanism for genuine Acme demo scenarios.
+    Resets Scenario A (missing telemetry) and Scenario B (verified tier overcharge).
+    """
+    from app.seed import seed_demo_cases
+    seeded_ids = seed_demo_cases(db, force=True)
+    return {"status": "ok", "message": "Demo cases successfully reset", "cases": seeded_ids}

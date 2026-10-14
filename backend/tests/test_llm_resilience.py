@@ -28,6 +28,7 @@ from app.config import Settings, settings
 from app.database import Base, get_db, install_append_only_triggers, set_sqlite_pragmas
 from app.main import app
 from app.models.case import Case, CaseEvent
+from app.models.calculation import Calculation
 from app.models.investigation import Finding, InvestigationRun, RunStatus
 
 REVIEWER_HEADERS = {"Authorization": f"Bearer {settings.demo_reviewer_token}"}
@@ -238,6 +239,11 @@ class TestLLMProviderFallback:
         assert "All LLM providers failed" in data["reason"]
 
         with SessionLocal() as db:
+            # Deterministic calculation row must be persisted even though LLM providers failed
+            calcs = db.query(Calculation).filter(Calculation.case_id == "case-resilience-1").all()
+            assert len(calcs) == 1
+            assert calcs[0].id is not None
+
             runs = db.query(InvestigationRun).filter(InvestigationRun.case_id == "case-resilience-1").all()
             assert len(runs) == 1
             assert runs[0].status == RunStatus.FAILED

@@ -219,6 +219,7 @@ class InvestigationWorkflow:
                     }
                     for it in (lr.interpretations or [])
                 ],
+                "undisputed_overcharge_cents": lr.undisputed_overcharge_cents,
             })
             valid_result_ids.append(lr.result_id)
 
@@ -442,14 +443,14 @@ class InvestigationWorkflow:
             # Require that when final type is CONFIRMED_CALCULATION_DISCREPANCY, calculation_line_result_id
             # is not null and points to an overcharged line; if null/invalid, set it to the target_lr or largest-overcharge line.
             if final_finding_type == "CONFIRMED_CALCULATION_DISCREPANCY":
-                overcharged_lines = [lr for lr in line_results if lr.get("difference_cents", 0) < 0]
+                overcharged_lines = [lr for lr in line_results if lr.get("difference_cents") is not None and lr.get("difference_cents") < 0]
                 overcharged_ids = {lr.get("id") for lr in overcharged_lines if lr.get("id") is not None}
                 curr_line_id = f_copy.get("calculation_line_result_id")
                 if curr_line_id is None or curr_line_id not in overcharged_ids:
-                    if target_lr and target_lr.get("difference_cents", 0) < 0:
+                    if target_lr and target_lr.get("difference_cents") is not None and target_lr.get("difference_cents") < 0:
                         f_copy["calculation_line_result_id"] = target_lr.get("id")
                     elif overcharged_lines:
-                        largest = min(overcharged_lines, key=lambda lr: lr.get("difference_cents", 0))
+                        largest = min(overcharged_lines, key=lambda lr: lr.get("difference_cents") if lr.get("difference_cents") is not None else 0)
                         f_copy["calculation_line_result_id"] = largest.get("id")
                         val_notes.append(
                             f"Calculation line result ID was unset or not overcharged; defaulted to line result {largest.get('id')} ({largest.get('line_id')}) with largest overcharge ({largest.get('difference_cents')}¢)"
@@ -556,7 +557,19 @@ class InvestigationWorkflow:
             self.db.commit()
             return {"status": status_val}
 
-        # 2. Persist Findings
+        # 2. Mark prior findings and options for this case as superseded / stale
+        self.db.query(Finding).filter(
+            Finding.case_id == state["case_id"],
+            Finding.is_stale == False,  # noqa: E712
+        ).update({"is_stale": True, "stale_reason": f"Superseded by investigation run {run_id}"})
+
+        self.db.query(ResolutionOption).filter(
+            ResolutionOption.case_id == state["case_id"],
+            ResolutionOption.is_stale == False,  # noqa: E712
+        ).update({"is_stale": True, "stale_reason": f"Superseded by investigation run {run_id}"})
+        self.db.flush()
+
+        # 3. Persist Findings
         db_findings = []
         for vf in state.get("validated_findings", []):
             f_id = f"fnd_{uuid.uuid4().hex[:12]}"

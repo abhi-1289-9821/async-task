@@ -24,8 +24,8 @@ class CalculationLineResultResponse(BaseModel):
     result_id: str
     rule_id: str
     original_amount_cents: int
-    recalculated_amount_cents: int
-    difference_cents: int
+    recalculated_amount_cents: Optional[int] = None
+    difference_cents: Optional[int] = None
     finding_type: FindingTypeDB
     quantity_used: float
     exempt_quantity: float
@@ -35,6 +35,7 @@ class CalculationLineResultResponse(BaseModel):
     assumptions: Optional[list[str]] = None
     explanation: str
     quarantined_events: Optional[list[dict[str, Any]]] = None
+    undisputed_overcharge_cents: Optional[int] = None
 
 
 class CalculationResponse(BaseModel):
@@ -46,8 +47,8 @@ class CalculationResponse(BaseModel):
     engine_status: EngineStatusDB
     engine_status_reason: Optional[str] = None
     total_original_billed_cents: int
-    total_recalculated_cents: int
-    total_difference_cents: int
+    total_recalculated_cents: Optional[int] = None
+    total_difference_cents: Optional[int] = None
     result_hash: str
     quarantined_events: Optional[list[dict[str, Any]]] = None
     created_at: datetime

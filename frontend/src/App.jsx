@@ -30,7 +30,17 @@ export default function App() {
   };
 
   useEffect(() => {
-    loadCases();
+    let ignore = false;
+    getCases()
+      .then((data) => {
+        if (!ignore) setCases(data);
+      })
+      .catch((err) => {
+        if (!ignore) addToast('error', err.message || 'Failed to load dispute cases');
+      });
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   const handleCaseCreated = (newCaseId) => {
@@ -72,10 +82,10 @@ export default function App() {
       <div className="toast-container">
         {toasts.map((t) => (
           <div key={t.id} className={`toast toast-${t.type}`}>
-            {t.type === 'success' && <CheckCircle2 size={16} color="var(--accent-emerald)" />}
-            {t.type === 'error' && <AlertCircle size={16} color="var(--accent-rose)" />}
-            {t.type === 'warning' && <AlertTriangle size={16} color="var(--accent-amber)" />}
-            {t.type === 'info' && <Info size={16} color="var(--accent-cyan)" />}
+            {t.type === 'success' && <CheckCircle2 size={16} style={{ color: 'var(--status-green)', flexShrink: 0 }} />}
+            {t.type === 'error' && <AlertCircle size={16} style={{ color: 'var(--status-rust)', flexShrink: 0 }} />}
+            {t.type === 'warning' && <AlertTriangle size={16} style={{ color: 'var(--status-amber)', flexShrink: 0 }} />}
+            {t.type === 'info' && <Info size={16} style={{ color: 'var(--status-teal)', flexShrink: 0 }} />}
             <span>{t.message}</span>
           </div>
         ))}

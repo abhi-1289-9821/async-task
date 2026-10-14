@@ -1,54 +1,25 @@
-# FairBill — Autonomous Billing Dispute Investigation & Governance Agent
+# FairBill — Autonomous Billing Dispute Investigation & Governance
 
-[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
-[![React 19](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-1.2+-purple.svg)](https://langchain-ai.github.io/langgraph/)
-
-A full-stack, AI-assisted platform engineered to investigate, recalculate, and resolve SaaS and cloud billing disputes. The system pairs a **pure deterministic pricing engine** for financial mathematics with an **autonomous LangGraph investigation agent**, human-in-the-loop review, and immutable audit logging.
+FairBill is a full-stack, AI-assisted platform engineered to investigate, recalculate, and resolve SaaS and cloud billing disputes. The system pairs a **pure deterministic pricing engine** (Python `Decimal`, integer cents) for all financial mathematics with an **autonomous LangGraph multi-node investigation workflow**, human-in-the-loop review, concurrency-safe credit issuance, and an immutable append-only audit trail.
 
 ---
 
-## 🌐 Live Demo & Deployment Credentials
+## Reviewer Access & Quick Start
 
-> [!NOTE]
-> The tokens below are **demo-only credentials** provisioned for reviewer evaluation on this deployment. Real production deployments require custom high-entropy secrets set via environment variables.
+> **Production Credentials**: When `ENVIRONMENT=production`, reviewer and viewer tokens are configured via `DEMO_REVIEWER_TOKEN` and `DEMO_VIEWER_TOKEN` environment variables and provided in the submission remarks. Default fallback tokens are strictly blocked in production.
 
-- **Deployed Live URL:** `https://billing-dispute-agent.onrender.com` *(or local: `http://localhost:5173`)*
-- **Demo Reviewer Token:** `demo-reviewer-token-2026` *(permissions: run calculations, trigger investigations, review findings, approve credits, upload amendments)*
-- **Demo Viewer Token:** `demo-viewer-token-2026` *(permissions: read-only access to dispute cases, audit logs, and calculation breakdowns)*
+- **Deployed Live URL:** `<DEPLOYED_URL>` *(or local: `http://localhost:5173`)*
+- **Reviewer Token:** Set via `DEMO_REVIEWER_TOKEN` (provided in submission remarks)
+- **Viewer Token:** Set via `DEMO_VIEWER_TOKEN` (provided in submission remarks)
 
----
-
-## 📑 Table of Contents
-
-- [The Problem & Architectural Invariants](#-the-problem--architectural-invariants)
-- [System Architecture](#-system-architecture)
-- [Auto-Seeded Demonstration Cases](#-auto-seeded-demonstration-cases)
-- [Step-by-Step Reviewer Walkthrough](#-step-by-step-reviewer-walkthrough)
-- [Core Features & Engineering Implementation](#-core-features--engineering-implementation)
-- [Scope: Completed vs Excluded](#-scope-completed-vs-excluded)
-- [Known Limitations](#-known-limitations)
-- [API Route Reference](#-api-route-reference)
-- [Deployment & Database Migrations](#-deployment--database-migrations)
-- [Automated Test Suite (143 Passed, 1 Skipped)](#-automated-test-suite-143-passed-1-skipped)
-- [Local Setup & Verification](#-local-setup--verification)
+### Quick Start
+1. Open the application at `<DEPLOYED_URL>` (or local `http://localhost:5173`).
+2. Click the **Token** button in the navigation bar and enter your reviewer token (or open `<DEPLOYED_URL>/?token=<YOUR_TOKEN>`).
+3. Open **`case-acme-101`** to inspect the deterministic calculation, trigger the investigation agent, and review findings.
 
 ---
 
-## 🎯 The Problem & Architectural Invariants
-
-Metered cloud and SaaS disputes arise when customer telemetry conflicts with complex contractual terms: graduated vs volume pricing brackets, environment exemptions (staging vs production), minimum spend commitments, and percentage discounts.
-
-### Non-Negotiable Ground Rules
-1. **Deterministic Financial Math Only**: Money is calculated strictly in Python using standard library `Decimal`, integer cents ($10.00 = 1000$ cents), and `ROUND_HALF_UP` boundary rounding in [`backend/app/billing_engine.py`](backend/app/billing_engine.py). **The LLM never computes, invents, or changes financial figures.**
-2. **AI Reasoner & Narrator**: LangGraph and LLM providers formulate structured findings, explanation hypotheses, and proposed resolutions, citing immutable cryptographic result IDs (`result_id`).
-3. **Fail-Loud Guarantee (No Mocking in Production)**: When `LLM_MODE=real`, the system never fakes or fabricates AI findings. If upstream providers fail or timeout, the run transitions to `FAILED`, appends an `INVESTIGATION_RUN_FAILED` audit event, and returns **HTTP 502 Bad Gateway**. If no LLM provider is configured, it returns **HTTP 503 Service Unavailable**.
-4. **Zero Bundle Secrets**: Client tokens are strictly user-supplied or loaded from session/local storage. No demo tokens or API keys exist in client build bundles.
-
----
-
-## 🏛️ System Architecture
+## Architecture
 
 ```
                                   ┌─────────────────────────────────────────┐
@@ -60,7 +31,7 @@ Metered cloud and SaaS disputes arise when customer telemetry conflicts with com
          ▼                                             ▼                                             ▼
 ┌─────────────────────────────────┐       ┌─────────────────────────────────┐       ┌─────────────────────────────────┐
 │     Deterministic Engine        │       │      Agentic Investigation      │       │     Credit Approval Service     │
-│   (backend/app/billing_engine)  │       │     (LangGraph Multi-Node)      │       │   (backend/app/credit_service)  │
+│  (backend/app/billing_engine.py)│       │     (LangGraph Multi-Node)      │       │  (backend/app/credit_service.py)│
 │  - Integer cents arithmetic     │       │  - Multi-provider fallback      │       │  - Row-level lock concurrency   │
 │  - Graduated vs Volume slabs    │       │  - Per-line finding synthesis   │       │  - Shared compute_remaining_cap │
 │  - Included units & overage     │       │  - Citation & amount validators │       │  - SHA-256 idempotency key      │
@@ -72,16 +43,160 @@ Metered cloud and SaaS disputes arise when customer telemetry conflicts with com
                                                            ▼
                                   ┌─────────────────────────────────────────┐
                                   │       Relational Storage & Audit        │
-                                  │  - 14 SQLAlchemy ORM Tables             │
+                                  │  - SQLAlchemy ORM Data Layer            │
                                   │  - Partial Unique Index on RUNNING runs │
                                   │  - Append-only DDL triggers             │
                                   │  - Alembic migrations & create_all      │
                                   └─────────────────────────────────────────┘
 ```
 
+### Architectural Invariants
+1. **Deterministic Financial Math Only**: Money is computed strictly in Python using standard library `Decimal`, integer cents ($10.00 = 1000$ cents), and `ROUND_HALF_UP` boundary rounding in [`backend/app/billing_engine.py`](backend/app/billing_engine.py). **The LLM never computes, invents, or changes financial figures.**
+2. **AI Reasoner & Narrator**: LangGraph and LLM providers formulate structured findings, explanation hypotheses, and proposed resolutions, citing immutable cryptographic result IDs (`result_id`).
+3. **Fail-Loud Guarantee**: When `LLM_MODE=real`, the system never fakes or fabricates AI findings. If upstream providers fail or timeout, the run transitions to `FAILED`, appends an `INVESTIGATION_RUN_FAILED` audit event, and returns **HTTP 502 Bad Gateway**. If no LLM provider is configured, it returns **HTTP 503 Service Unavailable**.
+4. **Zero Bundle Secrets**: Client tokens are strictly user-supplied or loaded from session/local storage. No demo tokens or API keys exist in client build bundles.
+
 ---
 
-## 📦 Auto-Seeded Demonstration Cases
+## Local Setup
+
+### 1. Environment Configuration
+
+#### PowerShell (Windows)
+```powershell
+Copy-Item .env.example .env
+```
+
+#### Bash (Linux/macOS)
+```bash
+cp .env.example .env
+```
+
+Edit `.env` to configure your database URL and optional LLM provider keys.
+
+### 2. Backend Setup
+
+#### PowerShell (Windows)
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+alembic upgrade head
+python scripts\check_llm.py
+uvicorn app.main:app --reload --port 8000
+```
+
+#### Bash (Linux/macOS)
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+alembic upgrade head
+python scripts/check_llm.py
+uvicorn app.main:app --reload --port 8000
+```
+
+### 3. Frontend Setup
+
+#### PowerShell (Windows)
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
+
+#### Bash (Linux/macOS)
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Visit `http://localhost:5173` to access the FairBill interface.
+
+---
+
+## Automated Test Suite
+
+Run pytest to see current results across all test suites.
+
+### Backend Tests
+
+#### PowerShell (Windows)
+```powershell
+cd backend
+$env:LLM_MODE="mock"; pytest -q
+```
+
+#### Bash (Linux/macOS)
+```bash
+cd backend
+LLM_MODE=mock pytest -q
+```
+
+*(Run pytest to see current results — all test files execute in mock mode with zero external network dependency).*
+
+### Per-File Test Suite Overview
+| Test File | Focus Area |
+| :--- | :--- |
+| `tests/test_billing_engine.py` | Pure deterministic math, slabs, rounding, commitments, exemptions, undisputed overcharge |
+| `tests/test_agent.py` | LangGraph pipeline, citations, per-line findings, injection defense, TTL reaper |
+| `tests/test_api_and_services.py` | CRUD, transitions, calculation API, reviews, credits, audit trail |
+| `tests/test_models_and_db.py` | Schema constraints, append-only triggers, composite keys |
+| `tests/test_llm_resilience.py` | Provider fallback, 429 quota retries, fail-loud 502, calculation persistence |
+| `tests/test_billing_period_and_provider_checks.py` | Billing period quarantine, 503 provider check, review ordering |
+| `tests/test_credit_cap.py` | Credit cap endpoint, adjustment deductions, cross-case line isolation, duplicate 409 |
+| `tests/test_generalized_disputes.py` | Cross-case multi-customer regression tests (EUR currency, multi-line invoices, graduated vs volume boundaries, prompt injection resistance, evidence version invalidation, idempotency, quarantine) |
+| `tests/test_seed.py` | Auto-seed idempotency, scenario verification, failure logging |
+| `tests/test_concurrency.py` | 10-thread concurrent credit approval stress test (Postgres locking) |
+
+**Backend Test Results:** 164 passed, 1 skipped (Postgres concurrency test gracefully skipped on local SQLite), 0 failures.
+
+### Frontend Quality Gates
+
+#### PowerShell & Bash
+```bash
+cd frontend
+npm run lint    # oxlint: 0 warnings, 0 errors
+npm test        # Vitest + React Testing Library (7 tests, all passing)
+npm run build   # Production bundle verification (built in ~600ms, 0 errors)
+```
+
+---
+
+## Scope: Completed vs Excluded
+
+### Completed Scope
+- **Generalized Pricing Engine:** Pure deterministic calculation engine with Python `Decimal`, integer cents, supporting all 7 pricing rule types (`FLAT`, `PER_UNIT`, `TIERED_GRADUATED`, `TIERED_VOLUME`, `INCLUDED_UNITS`, `DISCOUNT_PCT`, `MINIMUM_COMMIT`) without customer-specific logic.
+- **Dynamic Pricing Forms:** React forms (`CreateCaseModal.jsx`, `EvidenceModal.jsx`, `LinesTab.jsx`) dynamically render and validate fields, repeatable tier slabs (with add/remove and gap/overlap validation), included units, overage rates, discounts, minimum commitments, and environment exemptions for any customer or invoice.
+- **Generic Contract Ambiguity & Scenarios:** Evaluates any set of competing primary rules, generates discrete alternative scenarios, labels them as scenarios (not confirmed amounts), and computes the undisputed overcharge (`billed - max(scenarios)`).
+- **Strict Evidence & Finding Lifecycle:** Evidence changes bump the case evidence version, invalidate prior calculations and resolution options, mark older findings as stale, and strictly block credit approvals on outdated evidence versions.
+- **Prompt Injection & Untrusted Input Isolation:** Customer statements and descriptions are isolated inside escaped `<untrusted_...>` XML delimiters. System instructions mandate that LLM never executes customer directives or invents financial figures.
+- **Multi-Line & Multi-Currency Support:** Recalculates multi-line invoices and aggregates line-level reconciliation without assuming fixed line counts or currencies.
+- **Autonomous Multi-Provider Investigation:** Multi-node LangGraph workflow with fallback across Gemini, Groq, and OpenRouter, enforcing deterministic engine-derived finding types and valid citation anchors (`res_...`, `line-...`, `rule-...`, `ev-...`).
+- **Concurrency-Safe Credit Governance:** Row-level locks, cumulative remaining cap enforcement, single-credit-per-finding constraints, and unique idempotency keys returning HTTP 409 Conflict on duplicate approval attempts.
+- **Append-Only Audit Logging:** Physical database triggers on both SQLite and PostgreSQL protecting case events, calculation line results, reviews, and credits from deletion or tampering.
+
+### Excluded Scope
+- **Tax Calculation:** VAT, sales taxes, and jurisdiction exemptions are excluded.
+- **Payment Gateway Rails:** Mock credit entries are generated; direct Stripe/banking integration is excluded.
+- **Unstructured OCR:** Ingestion uses structured JSON API payloads and presets; OCR extraction is excluded.
+- **External Accounting Sync:** ERP synchronization (e.g. NetSuite/QuickBooks) is excluded.
+
+---
+
+## Known Limitations
+
+1. **Production Database Persistence**: Production deployments on Render **must use a hosted PostgreSQL `DATABASE_URL`** (such as [Neon](https://neon.tech)), because the default SQLite filesystem on Render is ephemeral and resets across service redeployments and restarts.
+2. **Privileged DB Users**: Append-only database triggers protect against application-level modifications; database administrators with direct superuser DDL access can disable triggers.
+3. **SQLite vs PostgreSQL Concurrency**: Concurrency row-locking is fully backed by `SELECT FOR UPDATE` in PostgreSQL; SQLite relies on `BEGIN IMMEDIATE` table-level transactions.
+4. **Single Discount Rule**: One percentage discount is supported per line; multiple competing discounts yield `AMBIGUOUS`.
+
+---
+
+## Auto-Seeded Demonstration Cases
 
 On startup against an empty database, `backend/app/seed.py` idempotently seeds three foundational dispute scenarios:
 
@@ -95,7 +210,7 @@ On startup against an empty database, `backend/app/seed.py` idempotently seeds t
    - **Contract Rule:** Competing `TIERED_GRADUATED` and `TIERED_VOLUME` rules on the same line (tier 1: up to 100 @ 15c; tier 2: unbounded @ 10c).
    - **Billed Amount:** $40.00 (4000 cents).
    - **Usage Telemetry:** 200 production units.
-   - **What it demonstrates:** Engine status **`AMBIGUOUS`** returning two concrete interpretations (Graduated = $25.00, Volume = $20.00; difference = 0 cents). AI generates finding type `CONTRACT_AMBIGUITY`, credit approval is blocked, and uploading a contract amendment (`POST /api/cases/{id}/evidence/rules`) supersedes the conflicting rule and resolves ambiguity.
+   - **What it demonstrates:** Engine status **`AMBIGUOUS`** returning two concrete interpretations (Graduated = $25.00, Volume = $20.00; difference = 0 cents). Undisputed minimum overcharge ($15.00) is computed deterministically and available for immediate credit approval while remainder awaits contract clarification.
 3. **`case-delta-103` — Clean Invoice Verification (No Discrepancy)**
    - **Contract Rule:** `FLAT` at 10000 cents ($100.00).
    - **Billed Amount:** $100.00 (10000 cents).
@@ -104,91 +219,35 @@ On startup against an empty database, `backend/app/seed.py` idempotently seeds t
 
 ---
 
-## 🚶 Step-by-Step Reviewer Walkthrough
+## Step-by-Step Reviewer Walkthrough
 
 Follow this end-to-end journey in the UI to evaluate the complete dispute governance lifecycle:
 
 1. **Select or Open Case:**
    - In the Disputes table, click on **`case-acme-101`**.
 2. **Execute Deterministic Calculation:**
-   - Under the **Deterministic Engine** tab, review the pre-computed run or click **"Execute Deterministic Calculation"**.
+   - Under the **Deterministic Engine** tab, review the pre-computed run or click **"Run Billing Engine"**.
    - Observe line item reconciliation: 250 billable units @ 10c = $25.00; 150 staging units marked exempt ($0.00); billed $50.00 $\rightarrow$ discrepancy of **-$25.00 (Overcharge)**.
-3. **Trigger Autonomous Investigation:**
-   - Switch to the **AI Investigation** tab and click **"Trigger Investigation Run"**.
-   - The LangGraph workflow executes. Review the generated finding anchored to `line-acme-api` with engine-derived type `CONFIRMED_CALCULATION_DISCREPANCY` and resolution options.
-4. **Human Review Finding:**
-   - Click **"Review Finding"** $\rightarrow$ select **`ACCEPT`** $\rightarrow$ enter a justification note $\rightarrow$ click **"Submit Review"**.
-   - Notice the status badge updates to **Accepted**, enabling credit approval.
-5. **Inspect Credit Cap & Approve Credit:**
+3. **Trigger LangGraph Investigation:**
+   - Switch to the **AI Investigation (LangGraph)** tab $\rightarrow$ click **"Trigger Investigation Run"**.
+   - The multi-node agent analyzes evidence, synthesizes a finding with verified citation anchors (`res_...`, `line-...`), and proposes resolution options.
+4. **Human Review:**
+   - Click **"Human Review"** on the generated finding.
+   - Select **ACCEPT** (or EDIT) and provide a reviewer justification note. Submit the review.
+5. **Concurrency-Safe Credit Issuance:**
    - Switch to the **Credit Issuance** tab.
-   - Notice the backend cap endpoint displays: Eligible: $25.00, Prior Adjustments: $5.00, **Remaining Cap: $20.00**.
-   - Select the accepted finding and click **"Approve & Issue Credit"**.
-   - The credit row appears in the table with `invoice_line_id: line-acme-api`. Remaining Cap immediately drops to **$0.00**, and the approve button disables with reason *"Credit cap exhausted ($0.00 remaining)"*.
-   - Attempting duplicate submission displays the toast: *"Credit already approved for this finding"*.
+   - Observe the live cap breakdown: Calculated Overcharge ($25.00) minus Prior Line Adjustments ($5.00) = Remaining Line Cap of **$20.00**.
+   - Select the accepted finding and click **"Approve Credit Under Row Lock"**.
+   - The credit row appears in the table with `invoice_line_id: line-acme-api`. Remaining Cap immediately drops to **$0.00**, and the approve button disables with reason *"Remaining allowable credit cap is $0.00"*.
+   - Attempting duplicate credit approval for the same finding returns HTTP 409 and displays: *"Credit already approved for this finding"*.
 6. **Upload Contract Amendment & Observe Invalidation:**
-   - Open **"Upload Evidence"** $\rightarrow$ select the **"Contract / Adjustment"** tab.
+   - Click **"Upload Evidence"** $\rightarrow$ select the **"Contract / Adjustment"** tab.
    - Add an amendment rule or adjustment.
-   - Upon upload, notice: Case evidence version bumps (v1 $\rightarrow$ v2), prior findings and options are flagged **STALE** with visible stale reasons, and the UI prompts for re-investigation.
+   - Upon upload, notice: Case evidence version bumps (v1 $\rightarrow$ v2), prior findings and options are flagged **STALE**, and the UI prompts for re-investigation.
 
 ---
 
-## 🛠️ Core Features & Engineering Implementation
-
-### 1. Pure Deterministic Billing Engine
-- Implemented in [`backend/app/billing_engine.py`](backend/app/billing_engine.py).
-- Supported rules: `FLAT`, `PER_UNIT`, `TIERED_GRADUATED`, `TIERED_VOLUME`, `INCLUDED_UNITS`, `DISCOUNT_PCT`, `MINIMUM_COMMIT`.
-- Billing period enforcement: Events outside `[period_start, period_end]` are quarantined with reason `"Outside billing period"`.
-- Cryptographic anchors: Emits an immutable `result_id` (`res_` + SHA-256) per line item.
-
-### 2. Multi-Provider LLM Resilience
-- Implemented in [`backend/app/agent/providers.py`](backend/app/agent/providers.py) and [`llm_client.py`](backend/app/agent/llm_client.py).
-- Fallback chain: **Gemini (primary) $\rightarrow$ Groq $\rightarrow$ OpenRouter**.
-- Automatic retry on 429/5xx/timeout; immediate failover on 401/403/404.
-- Verify live connectivity anytime with:
-  ```bash
-  python backend/scripts/check_llm.py
-  ```
-
-### 3. Concurrency-Safe Credit Approval
-- Implemented in [`backend/app/services/credit_service.py`](backend/app/services/credit_service.py).
-- Row-level lock: `SELECT FOR UPDATE` on PostgreSQL; `BEGIN IMMEDIATE` on SQLite.
-- Shared cap computation: `compute_remaining_cap` verifies line and case-wide adjustments.
-- Idempotency key: `SHA-256(case_id:invoice_line_id:finding_id)` strictly blocks repeat credits with HTTP 409.
-
-### 4. Append-Only Audit Logging & Storage Triggers
-- Physical SQLite triggers (`RAISE(ABORT)`) and PostgreSQL triggers block application-level `UPDATE` and `DELETE` queries on `case_events`, `calculation_line_results`, `credits`, `finding_reviews`, and `evidence_versions`.
-
----
-
-## ⚖️ Scope: Completed vs Excluded
-
-### Completed Scope
-- [x] Pure deterministic calculation engine with Decimal math and boundary rounding.
-- [x] LangGraph multi-node autonomous investigation with multi-provider fallback.
-- [x] Per-line finding generation and independent resolution options.
-- [x] Deterministic engine-derived finding types replacing contradictory AI text.
-- [x] Repeat-run atomic guard via database partial unique index with 180s TTL reaper.
-- [x] Contract rule amendments with superseding (`is_active=False`) and content hashing.
-- [x] Billing period usage filtering (`period_start`, `period_end`).
-- [x] Accessible dark-mode React UI with separate non-flickering refresh states.
-
-### Excluded Scope
-- **Tax Calculation:** VAT, sales taxes, and jurisdiction exemptions are excluded.
-- **Payment Gateway Rails:** Mock credit entries are generated; direct Stripe/banking integration is excluded.
-- **Unstructured OCR:** Ingestion uses structured JSON API payloads and presets; OCR extraction is excluded.
-- **External Accounting Sync:** ERP synchronization (e.g. NetSuite/QuickBooks) is excluded.
-
----
-
-## ⚠️ Known Limitations
-
-1. **Privileged DB Users**: Triggers protect against application-level modifications; database administrators with direct DDL access can disable triggers.
-2. **SQLite vs PostgreSQL Concurrency**: Concurrency row-locking is fully backed by `SELECT FOR UPDATE` in PostgreSQL; SQLite relies on `BEGIN IMMEDIATE`.
-3. **Single Discount Rule**: One percentage discount is supported per line; multiple discounts yield `AMBIGUOUS`.
-
----
-
-## 🔌 API Route Reference
+## API Route Reference
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
@@ -204,7 +263,7 @@ Follow this end-to-end journey in the UI to evaluate the complete dispute govern
 | `POST` | `/api/cases/{case_id}/investigations` | Run autonomous investigation (502 on failure, 503 if unconfigured) | **201 / 502 / 503** |
 | `GET` | `/api/cases/{case_id}/investigations` | List investigation runs for a case | **200 OK** |
 | `GET` | `/api/findings/case/{case_id}` | List structured findings and review history | **200 OK** |
-| `POST` | `/api/findings/{id}/review` | Submit human review (`ACCEPT`, `EDIT`, `REJECT`) | **200 OK** |
+| `POST` | `/api/findings/{id}/review` | Submit human review (`ACCEPT`, `EDIT`, `REJECT`) | **200 OK / 409** |
 | `GET` | `/api/credits/case/{case_id}/cap` | Read calculated credit cap and adjustments | **200 OK** |
 | `POST` | `/api/credits/approve` | Approve financial credit under lock and cap | **201 / 400 / 409** |
 | `GET` | `/api/credits/case/{case_id}` | List approved credits for a case | **200 OK** |
@@ -213,79 +272,13 @@ Follow this end-to-end journey in the UI to evaluate the complete dispute govern
 
 ---
 
-## ☁️ Deployment & Database Migrations
+## Deployment & Database Migrations
 
-- **Platform Blueprint:** Documented in [`render.yaml`](render.yaml) for Node 20 and Python 3.12.
+- **Platform Blueprint:** Documented in [`render.yaml`](render.yaml) for Node 20 and Python 3.12 with automated `alembic upgrade head` pre-deploy and startup migration execution.
+- **Production Database Requirement:** Production deployments on Render **must use a hosted PostgreSQL `DATABASE_URL`** (such as [Neon](https://neon.tech)), because the default SQLite filesystem on Render is ephemeral and resets across service redeployments and restarts.
 - **Alembic vs create_all:**
-  - `create_all_tables()` automatically initializes all 14 tables and append-only database triggers for fast local testing and greenfield SQLite setups.
-  - Alembic migrations (`alembic upgrade head`) manage sequential DDL evolutions (partial indexes, active flags, billing periods) in production and PostgreSQL environments.
+  - `create_all_tables()` automatically initializes all tables and append-only database triggers for fast local testing and greenfield SQLite setups.
+  - Alembic migrations (`alembic upgrade head`) manage sequential DDL evolutions in production and PostgreSQL environments.
+  - Database seeding (`seed_demo_cases_if_empty`) runs safely and idempotently after migrations on startup, only inserting demo scenarios if the database contains 0 cases.
 - **Multi-User Reviewer Tokens (`REVIEWER_TOKENS`):**
   - Set `REVIEWER_TOKENS="token_alice:alice@domain.com,token_bob:bob@domain.com"` in `.env` to map specific bearer tokens to individual reviewer identities in the audit log.
-
----
-
-## 🧪 Automated Test Suite (143 Passed, 1 Skipped)
-
-Run the backend test suite:
-```bash
-cd backend && LLM_MODE=mock pytest -q
-```
-**Actual pytest output:**
-```
-================== 143 passed, 1 skipped, 1 warning in 9.43s ==================
-```
-
-### Per-File Test Function Count (`grep -c "def test_"`)
-| Test File | Count | Focus Area |
-| :--- | :--- | :--- |
-| `tests/test_billing_engine.py` | 67 | Pure deterministic math, slabs, rounding, commitments, exemptions |
-| `tests/test_agent.py` | 24 | LangGraph pipeline, citations, per-line findings, injection defense, TTL |
-| `tests/test_api_and_services.py`| 23 | CRUD, transitions, calculation API, reviews, credits, audit |
-| `tests/test_models_and_db.py` | 10 | Schema constraints, append-only triggers, unique constraints |
-| `tests/test_llm_resilience.py` | 10 | Provider fallback, 429 quota retries, fail-loud 502, secret hygiene |
-| `tests/test_task9.py` | 4 | Billing period quarantine, 503 provider check, review ordering |
-| `tests/test_credit_cap.py` | 3 | Credit cap endpoint, adjustment deductions, duplicate 409 |
-| `tests/test_seed.py` | 2 | Auto-seed idempotency, scenario verification, failure logging |
-| `tests/test_concurrency.py` | 2 | 10-thread concurrent credit approval stress test (1 skipped on SQLite) |
-| **Total Test Functions** | **145** | *(Pytest collected: 144 test items — 143 passed, 1 skipped)* |
-
----
-
-## 🚀 Local Setup & Verification
-
-### 1. Configure Environment
-```bash
-cp .env.example .env
-```
-Edit `.env` to configure your database URL and optional LLM keys.
-
-### 2. Backend Setup
-```bash
-cd backend
-python -m venv .venv
-
-# Activate:
-# Windows:
-.venv\Scripts\activate
-# Linux/macOS:
-source .venv/bin/activate
-
-pip install -r requirements.txt
-alembic upgrade head
-python scripts/check_llm.py
-```
-
-### 3. Run Backend Tests
-```bash
-$env:LLM_MODE="mock"; pytest -q
-```
-
-### 4. Frontend Setup & Verification
-```bash
-cd ../frontend
-npm ci
-npm run lint
-npm run build
-npm run dev
-```
-Visit `http://localhost:5173` to access the FairBill workspace.

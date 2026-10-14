@@ -34,7 +34,7 @@ Each entry: Phase, timestamp, category, event, fix, status.
 - **Status**: resolved
 
 ### [Phase 0] [2026-10-13 11:50] — npm global directory missing
-- **Event**: C:\Users\abhin\AppData\Roaming\npm did not exist, causing npm list -g to fail.
+- **Event**: %APPDATA%\npm did not exist, causing npm list -g to fail.
 - **Fix / Outcome**: Created the directory. npm now works. Will install Vite in Phase 4.
 - **Status**: resolved
 

@@ -55,22 +55,213 @@ def _content_hash(lines, rules, events) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def seed_demo_cases_if_empty(db: Session) -> None:
+def seed_demo_cases(db: Session, force: bool = False) -> list[str]:
     """
-    Creates three demo cases when the cases table is empty.
-    Idempotent - does nothing if any case rows already exist.
+    Creates demo cases (including Scenario A: Missing Evidence, Scenario B: Verified Tier Overcharge,
+    Bravo: Ambiguous Clause, Delta: Clean Invoice).
+    If force=True, clears and re-creates demo cases.
     """
-    if db.query(Case).count() > 0:
+    demo_ids = [
+        "case-acme-unverified",
+        "case-acme-verified",
+        "case-acme-101",
+        "case-bravo-102",
+        "case-delta-103",
+    ]
+    if not force and db.query(Case).count() > 0:
         logger.info("seed: database already has cases - skipping demo seed")
-        return
+        return []
 
-    logger.info("seed: empty database detected - seeding 3 demo cases")
+    if force:
+        logger.info("seed: force=True - resetting demo cases")
+        is_sqlite = db.bind is not None and db.bind.dialect.name == "sqlite"
+        if is_sqlite:
+            for trg in [
+                "trg_case_events_no_delete",
+                "trg_calc_results_no_delete",
+                "trg_credits_no_delete",
+                "trg_finding_reviews_no_delete",
+                "trg_evidence_versions_no_delete",
+                "trg_findings_no_delete",
+            ]:
+                try:
+                    db.execute(text(f"DROP TRIGGER IF EXISTS {trg};"))
+                except Exception:
+                    pass
+            db.commit()
+
+        for cid in demo_ids:
+            existing = db.query(Case).filter(Case.id == cid).first()
+            if existing:
+                db.delete(existing)
+        db.commit()
+
+        if is_sqlite:
+            from app.database import install_append_only_triggers
+            install_append_only_triggers(db.bind)
+
+    logger.info("seed: seeding demo cases")
     now = datetime.now(timezone.utc)
+    seeded = []
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # SCENARIO A: Acme Analytics Ltd. — Missing Evidence
+    # ─────────────────────────────────────────────────────────────────────────
+    c_scen_a = Case(
+        id="case-acme-unverified",
+        title="API Tier Rate Dispute — Awaiting Telemetry Evidence",
+        customer_name="Acme Analytics Ltd.",
+        invoice_id="INV-2026-ACME-001",
+        currency="USD",
+        claimed_usage_quantity=1200.0,
+        claimed_usage_uom="API Calls",
+        disputed_amount_cents=136000,
+        dispute_description=(
+            "We were billed $1,850.00 for 1,200 API calls, but our contract specifies tiered pricing: "
+            "first 500 calls included ($0), calls 501–1,000 at $0.80 each, and calls above 1,000 at $0.45 each. "
+            "We also believe a previous $100.00 credit was not applied to this account. "
+            "Please credit the discrepancy immediately."
+        ),
+        status=CaseStatus.OPEN.value,
+        evidence_version=1,
+    )
+    db.add(c_scen_a)
+    db.flush()
+
+    line_scen_a = InvoiceLine(
+        id="line-acme-calls-unverified",
+        case_id=c_scen_a.id,
+        description="Production API Ingestion Calls",
+        original_amount_cents=185000,
+    )
+    db.add(line_scen_a)
+    db.flush()
+
+    db.add(ContractRule(
+        id="rule-acme-tiers-unverified",
+        case_id=c_scen_a.id,
+        line_id=line_scen_a.id,
+        rule_type="TIERED_GRADUATED",
+        rate_cents=0,
+        tiers=[
+            {"up_to": 500, "price_per_unit_cents": 0},
+            {"up_to": 1000, "price_per_unit_cents": 80},
+            {"up_to": None, "price_per_unit_cents": 45},
+        ],
+        exempt_environments=["staging", "test"],
+    ))
+
+    # Alleged unverified prior credit from customer statement (is_verified=False)
+    db.add(Adjustment(
+        id="adj-acme-alleged-100",
+        case_id=c_scen_a.id,
+        invoice_line_id=line_scen_a.id,
+        amount_cents=10000,
+        description="Customer statement alleges unapplied prior billing credit",
+        is_verified=False,
+        evidence_source="Customer Statement (Unverified Claim)",
+    ))
+    db.flush()
+
+    # Zero telemetry events persisted for Scenario A!
+    rules_a = db.query(ContractRule).filter(ContractRule.case_id == c_scen_a.id).all()
+    lines_a = db.query(InvoiceLine).filter(InvoiceLine.case_id == c_scen_a.id).all()
+    db.add(EvidenceVersion(
+        case_id=c_scen_a.id,
+        version_number=1,
+        content_hash=_content_hash(lines_a, rules_a, []),
+        created_by="SYSTEM",
+    ))
+    db.add(CaseEvent(
+        case_id=c_scen_a.id,
+        event_type="CASE_CREATED",
+        actor="SYSTEM",
+        details={"source": "seed", "scenario": "A_MISSING_EVIDENCE"},
+    ))
+    seeded.append(c_scen_a.id)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SCENARIO B: Acme Analytics Ltd. — Verified Tier Overcharge
+    # ─────────────────────────────────────────────────────────────────────────
+    c_scen_b = Case(
+        id="case-acme-verified",
+        title="Metered API Tier Overcharge — Verified Telemetry",
+        customer_name="Acme Analytics Ltd.",
+        invoice_id="INV-2026-ACME-002",
+        currency="USD",
+        claimed_usage_quantity=1200.0,
+        claimed_usage_uom="API Calls",
+        disputed_amount_cents=136000,
+        dispute_description=(
+            "Customer reports $1,360.00 overcharge on 1,200 API calls billed at $1,850.00. "
+            "Verified telemetry confirms 1,200 production calls. "
+            "Under graduated contract terms (first 500 @ $0, next 500 @ $0.80, remaining 200 @ $0.45), "
+            "recalculated charge is $490.00, yielding a $1,360.00 overcharge."
+        ),
+        status=CaseStatus.OPEN.value,
+        evidence_version=1,
+    )
+    db.add(c_scen_b)
+    db.flush()
+
+    line_scen_b = InvoiceLine(
+        id="line-acme-calls-verified",
+        case_id=c_scen_b.id,
+        description="Production API Ingestion Calls",
+        original_amount_cents=185000,
+    )
+    db.add(line_scen_b)
+    db.flush()
+
+    db.add(ContractRule(
+        id="rule-acme-tiers-verified",
+        case_id=c_scen_b.id,
+        line_id=line_scen_b.id,
+        rule_type="TIERED_GRADUATED",
+        rate_cents=0,
+        tiers=[
+            {"up_to": 500, "price_per_unit_cents": 0},
+            {"up_to": 1000, "price_per_unit_cents": 80},
+            {"up_to": None, "price_per_unit_cents": 45},
+        ],
+        exempt_environments=["staging", "test"],
+    ))
+
+    # 1,200 verified production usage calls
+    db.add(UsageEvent(
+        id="ev-acme-verified-prod-1",
+        case_id=c_scen_b.id,
+        line_id=line_scen_b.id,
+        quantity=1200.0,
+        environment="production",
+        event_timestamp=now,
+    ))
+    db.flush()
+
+    rules_b = db.query(ContractRule).filter(ContractRule.case_id == c_scen_b.id).all()
+    events_b = db.query(UsageEvent).filter(UsageEvent.case_id == c_scen_b.id).all()
+    lines_b = db.query(InvoiceLine).filter(InvoiceLine.case_id == c_scen_b.id).all()
+    db.add(EvidenceVersion(
+        case_id=c_scen_b.id,
+        version_number=1,
+        content_hash=_content_hash(lines_b, rules_b, events_b),
+        created_by="SYSTEM",
+    ))
+    db.add(CaseEvent(
+        case_id=c_scen_b.id,
+        event_type="CASE_CREATED",
+        actor="SYSTEM",
+        details={"source": "seed", "scenario": "B_VERIFIED_OVERCHARGE"},
+    ))
+    seeded.append(c_scen_b.id)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Legacy / Additional Demo Cases
+    # ─────────────────────────────────────────────────────────────────────────
     # 1. Acme Corp - PER_UNIT overcharge
     c1 = Case(
         id="case-acme-101",
-        title="Metered API Tier Overcharge",
+        title="Metered API Tier Overcharge (Staging Exemption)",
         customer_name="Acme Corp",
         disputed_amount_cents=2500,
         dispute_description=(
@@ -120,17 +311,16 @@ def seed_demo_cases_if_empty(db: Session) -> None:
     ))
     db.flush()
 
-    # Prior adjustment (500c) so cap logic is demonstrable
     db.add(Adjustment(
         id="adj-acme-1",
         case_id=c1.id,
         invoice_line_id="line-api-calls",
         amount_cents=500,
         description="Partial goodwill credit applied by account team before dispute filing",
+        is_verified=True,
     ))
     db.flush()
 
-    # EvidenceVersion snapshot (version 1)
     rules_acme = db.query(ContractRule).filter(ContractRule.case_id == c1.id).all()
     events_acme = db.query(UsageEvent).filter(UsageEvent.case_id == c1.id).all()
     lines_acme = db.query(InvoiceLine).filter(InvoiceLine.case_id == c1.id).all()
@@ -140,13 +330,13 @@ def seed_demo_cases_if_empty(db: Session) -> None:
         content_hash=_content_hash(lines_acme, rules_acme, events_acme),
         created_by="SYSTEM",
     ))
-
     db.add(CaseEvent(
         case_id=c1.id,
         event_type="CASE_CREATED",
         actor="SYSTEM",
         details={"source": "seed", "title": c1.title},
     ))
+    seeded.append(c1.id)
 
     # 2. Bravo Ltd - Ambiguous tier interpretation
     c2 = Case(
@@ -275,4 +465,10 @@ def seed_demo_cases_if_empty(db: Session) -> None:
     ))
 
     db.commit()
-    logger.info("seed: successfully created 3 demo cases (acme-101, bravo-102, delta-103)")
+    logger.info("seed: successfully created demo cases (acme-unverified, acme-verified, acme-101, bravo-102, delta-103)")
+    return seeded
+
+
+def seed_demo_cases_if_empty(db: Session) -> None:
+    """Creates demo cases when the cases table is empty."""
+    seed_demo_cases(db, force=False)

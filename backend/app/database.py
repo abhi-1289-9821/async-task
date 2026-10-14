@@ -79,14 +79,55 @@ def get_db():
 def create_all_tables():
     """
     Create all tables from models. Used for local dev and tests.
-    LIMITATION: This is NOT a migration system. If you add a column to an
-    existing table, drop and recreate the DB or write an Alembic migration.
-    Alembic migrations are used for production (Phase 2+).
     """
     # Import all models so SQLAlchemy sees them before create_all()
     import app.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
+    run_auto_migrations(engine)
     install_append_only_triggers(engine)
+
+
+def run_auto_migrations(target_engine=None):
+    """Adds missing columns to existing tables for SQLite and PostgreSQL gracefully."""
+    target = target_engine or engine
+    dialect = target.dialect.name
+    with target.connect() as conn:
+        if dialect == "sqlite":
+            try:
+                cols = [row[1] for row in conn.execute(text("PRAGMA table_info(cases)")).fetchall()]
+                if cols:
+                    if "invoice_id" not in cols:
+                        conn.execute(text("ALTER TABLE cases ADD COLUMN invoice_id VARCHAR(64)"))
+                    if "currency" not in cols:
+                        conn.execute(text("ALTER TABLE cases ADD COLUMN currency VARCHAR(10) DEFAULT 'USD' NOT NULL"))
+                    if "claimed_usage_quantity" not in cols:
+                        conn.execute(text("ALTER TABLE cases ADD COLUMN claimed_usage_quantity NUMERIC(20, 6)"))
+                    if "claimed_usage_uom" not in cols:
+                        conn.execute(text("ALTER TABLE cases ADD COLUMN claimed_usage_uom VARCHAR(50)"))
+            except Exception:
+                pass
+
+            try:
+                adj_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(adjustments)")).fetchall()]
+                if adj_cols:
+                    if "is_verified" not in adj_cols:
+                        conn.execute(text("ALTER TABLE adjustments ADD COLUMN is_verified BOOLEAN DEFAULT 1 NOT NULL"))
+                    if "evidence_source" not in adj_cols:
+                        conn.execute(text("ALTER TABLE adjustments ADD COLUMN evidence_source VARCHAR(255)"))
+            except Exception:
+                pass
+            conn.commit()
+        elif dialect == "postgresql":
+            try:
+                conn.execute(text("ALTER TABLE cases ADD COLUMN IF NOT EXISTS invoice_id VARCHAR(64)"))
+                conn.execute(text("ALTER TABLE cases ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'USD' NOT NULL"))
+                conn.execute(text("ALTER TABLE cases ADD COLUMN IF NOT EXISTS claimed_usage_quantity NUMERIC(20, 6)"))
+                conn.execute(text("ALTER TABLE cases ADD COLUMN IF NOT EXISTS claimed_usage_uom VARCHAR(50)"))
+                conn.execute(text("ALTER TABLE adjustments ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT TRUE NOT NULL"))
+                conn.execute(text("ALTER TABLE adjustments ADD COLUMN IF NOT EXISTS evidence_source VARCHAR(255)"))
+                conn.commit()
+            except Exception:
+                pass
 
 
 def install_append_only_triggers(target_engine=None):

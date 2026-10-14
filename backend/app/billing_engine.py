@@ -195,8 +195,8 @@ class LineCalculationResult:
     line_id: str
     rule_id: str
     original_amount_cents: int
-    recalculated_amount_cents: int
-    difference_cents: int          # recalculated - original (negative = overcharge)
+    recalculated_amount_cents: int | None
+    difference_cents: int | None          # recalculated - original (negative = overcharge)
     finding_type: FindingType
     quantity_used: Decimal         # After exemptions applied
     exempt_quantity: Decimal       # How many units were excluded
@@ -206,6 +206,7 @@ class LineCalculationResult:
     interpretations: list[InterpretationResult]  # Non-empty only for AMBIGUOUS
     assumptions: list[str]         # Assumptions this calculation relied on
     explanation: str               # Human-readable single-sentence explanation
+    undisputed_overcharge_cents: int | None = None  # Minimum overcharge under every interpretation, floored at 0
 
 
 @dataclass
@@ -219,8 +220,8 @@ class EngineResult:
     status: EngineStatus
     line_results: list[LineCalculationResult]
     total_original_billed_cents: int
-    total_recalculated_cents: int
-    total_difference_cents: int     # recalculated - original
+    total_recalculated_cents: int | None
+    total_difference_cents: int | None     # recalculated - original
     quarantined_events: list[QuarantinedEvent]
     result_hash: str                # SHA-256 of all inputs, for reproducibility verification
     status_reason: str = ""         # Set when status != OK
@@ -472,22 +473,10 @@ def calculate_line(
 
     # ── 2. Guard: missing primary rule ───────────────────────────────────────
     if not primary_rules:
-        return LineCalculationResult(
-            result_id=_compute_result_id(line.line_id, "none", Decimal("0"), RuleType.FLAT),
-            line_id=line.line_id,
+        return _make_insufficient_data_result(
+            line=line,
             rule_id="none",
-            original_amount_cents=line.original_amount_cents,
-            recalculated_amount_cents=0,
-            difference_cents=0,
-            finding_type=FindingType.INSUFFICIENT_DATA,
-            quantity_used=Decimal("0"),
-            exempt_quantity=Decimal("0"),
-            quarantined_events=[],
-            applied_discount_pct=Decimal("0"),
-            applied_minimum_commit_cents=0,
-            interpretations=[],
-            assumptions=["No primary pricing rule found for this line"],
-            explanation="Cannot recalculate: no primary pricing rule found.",
+            reason="no primary pricing rule found.",
         )
 
     # ── 3. Guard: two discount rules → AMBIGUOUS ─────────────────────────────
@@ -545,28 +534,91 @@ def calculate_line(
                         )
                     prev_bound = bound
 
-    # ── 5. Guard: multiple primary rules ──────────────────────────────────────
-    has_graduated = any(r.rule_type == RuleType.TIERED_GRADUATED for r in primary_rules)
-    has_volume    = any(r.rule_type == RuleType.TIERED_VOLUME    for r in primary_rules)
-    if len(primary_rules) > 1 and not (has_graduated and has_volume and len(primary_rules) == 2):
-        return _make_ambiguous_result(
-            line=line,
-            rule_id=primary_rules[0].rule_id,
-            reason="Multiple conflicting primary pricing rules on one line; rule priority undefined.",
-            assumptions=[f"Primary rules found: {', '.join(r.rule_id for r in primary_rules)}"],
-        )
+    # ── 5. Guard: multiple primary rules → AMBIGUOUS with scenario interpretations ──
+    if len(primary_rules) > 1:
+        # Multiple competing primary rules on the same line create contract ambiguity.
+        # Compute alternative scenario calculations for each competing primary rule.
+        has_graduated = any(r.rule_type == RuleType.TIERED_GRADUATED for r in primary_rules)
+        has_volume    = any(r.rule_type == RuleType.TIERED_VOLUME    for r in primary_rules)
+        has_grad_vol_pair = (len(primary_rules) == 2 and has_graduated and has_volume)
 
-    # ── 5a. Guard: TIERED_GRADUATED + TIERED_VOLUME on same line → AMBIGUOUS ──
-    if has_graduated and has_volume:
-        # We have two valid interpretations; compute both and return as AMBIGUOUS
-        grad_rule = next(r for r in primary_rules if r.rule_type == RuleType.TIERED_GRADUATED)
-        vol_rule  = next(r for r in primary_rules if r.rule_type == RuleType.TIERED_VOLUME)
+        applied_disc = discount_rules[0].discount_pct if discount_rules else Decimal("0")
+        applied_commit = commit_rules[0].minimum_commit_cents if commit_rules else 0
 
-        billable, exempt_evs, q = _partition_events(
-            events, line.line_id, grad_rule.exempt_environments
-        )
-        quarantined_all.extend(q)
-        if not billable and not exempt_evs:
+        interpretations_list: list[InterpretationResult] = []
+        max_quantity = Decimal("0")
+        max_exempt = Decimal("0")
+        any_uncovered = False
+        all_missing_metered = True
+
+        for r in primary_rules:
+            billable, exempt_evs, q = _partition_events(events, line.line_id, r.exempt_environments)
+            for qe in q:
+                if qe not in quarantined_all:
+                    quarantined_all.append(qe)
+
+            qty = sum((e.quantity for e in billable), Decimal("0"))
+            ex_qty = sum((e.quantity for e in exempt_evs), Decimal("0"))
+            if qty > max_quantity:
+                max_quantity = qty
+            if ex_qty > max_exempt:
+                max_exempt = ex_qty
+
+            is_metered = r.rule_type in (
+                RuleType.PER_UNIT, RuleType.TIERED_GRADUATED,
+                RuleType.TIERED_VOLUME, RuleType.INCLUDED_UNITS
+            )
+            if is_metered:
+                if billable or exempt_evs:
+                    all_missing_metered = False
+            else:
+                all_missing_metered = False
+
+            if r.rule_type == RuleType.FLAT:
+                raw_amt = _apply_flat(r)
+                assumption = "FLAT rule: fixed charge regardless of usage."
+            elif r.rule_type == RuleType.PER_UNIT:
+                raw_amt = _apply_per_unit(r, qty)
+                assumption = f"PER_UNIT rule: {r.rate_cents}¢ per billable unit."
+            elif r.rule_type == RuleType.TIERED_GRADUATED:
+                raw_amt, unc = _apply_tiered_graduated(r, qty)
+                if unc:
+                    any_uncovered = True
+                assumption = "TIERED_GRADUATED: each tier's rate applies only to units within that band."
+            elif r.rule_type == RuleType.TIERED_VOLUME:
+                raw_amt, unc = _apply_tiered_volume(r, qty)
+                if unc:
+                    any_uncovered = True
+                assumption = "TIERED_VOLUME: all units priced at the rate of the tier the total quantity falls into."
+            elif r.rule_type == RuleType.INCLUDED_UNITS:
+                raw_amt = _apply_included_units(r, qty)
+                assumption = f"INCLUDED_UNITS: first {r.included_units} units free, overage at {r.overage_rate_cents or r.rate_cents}¢."
+            else:
+                raw_amt = Decimal("0")
+                assumption = f"Contract rule {r.rule_id} ({r.rule_type.value})."
+
+            if discount_rules:
+                raw_amt = raw_amt - (raw_amt * (applied_disc / Decimal("100")))
+            if commit_rules:
+                if raw_amt < Decimal(applied_commit):
+                    raw_amt = Decimal(applied_commit)
+
+            rule_amt_cents = _round_cents(raw_amt)
+
+            if has_grad_vol_pair:
+                interp_id = "graduated" if r.rule_type == RuleType.TIERED_GRADUATED else "volume"
+            else:
+                interp_id = r.rule_id
+
+            interpretations_list.append(InterpretationResult(
+                interpretation_id=interp_id,
+                recalculated_amount_cents=rule_amt_cents,
+                assumptions=[assumption],
+                rule_id=r.rule_id,
+                line_id=line.line_id,
+            ))
+
+        if all_missing_metered:
             reason = (
                 "All usage events were quarantined due to validation errors; insufficient valid data to recalculate."
                 if quarantined_all
@@ -574,88 +626,67 @@ def calculate_line(
             )
             return _make_insufficient_data_result(
                 line=line,
-                rule_id=grad_rule.rule_id,
+                rule_id=primary_rules[0].rule_id,
                 reason=reason,
                 quarantined_events=quarantined_all,
             )
-        quantity = sum((e.quantity for e in billable), Decimal("0"))
-        exempt_qty = sum((e.quantity for e in exempt_evs), Decimal("0"))
 
-        grad_raw, grad_uncovered = _apply_tiered_graduated(grad_rule, quantity)
-        vol_raw, vol_uncovered   = _apply_tiered_volume(vol_rule, quantity)
-
-        if grad_uncovered or vol_uncovered:
+        if any_uncovered:
             return LineCalculationResult(
                 result_id=_compute_result_id(
-                    line.line_id, grad_rule.rule_id, quantity, RuleType.TIERED_GRADUATED,
+                    line.line_id, primary_rules[0].rule_id, max_quantity, primary_rules[0].rule_type,
                     rules=rules_for_line, original_amount_cents=line.original_amount_cents
                 ),
                 line_id=line.line_id,
-                rule_id=grad_rule.rule_id,
+                rule_id=primary_rules[0].rule_id,
                 original_amount_cents=line.original_amount_cents,
-                recalculated_amount_cents=0,
-                difference_cents=0,
+                recalculated_amount_cents=None,
+                difference_cents=None,
                 finding_type=FindingType.INSUFFICIENT_DATA,
-                quantity_used=quantity,
-                exempt_quantity=exempt_qty,
+                quantity_used=max_quantity,
+                exempt_quantity=max_exempt,
                 quarantined_events=quarantined_all,
                 applied_discount_pct=Decimal("0"),
                 applied_minimum_commit_cents=0,
                 interpretations=[],
                 assumptions=["Usage exceeds tier boundaries without unbounded catch-all in ambiguous rules."],
-                explanation=f"Cannot recalculate: usage of {quantity} units exceeds bounded tier brackets.",
+                explanation=f"Cannot recalculate: usage of {max_quantity} units exceeds bounded tier brackets.",
             )
 
-        applied_disc = discount_rules[0].discount_pct if discount_rules else Decimal("0")
-        applied_commit = commit_rules[0].minimum_commit_cents if commit_rules else 0
+        highest_interp = max(i.recalculated_amount_cents for i in interpretations_list)
+        undisputed_overcharge = max(0, line.original_amount_cents - highest_interp)
 
-        if discount_rules:
-            grad_raw = grad_raw - (grad_raw * (applied_disc / Decimal("100")))
-            vol_raw  = vol_raw - (vol_raw * (applied_disc / Decimal("100")))
-        if commit_rules:
-            if grad_raw < Decimal(applied_commit):
-                grad_raw = Decimal(applied_commit)
-            if vol_raw < Decimal(applied_commit):
-                vol_raw = Decimal(applied_commit)
-
-        grad_amt = _round_cents(grad_raw)
-        vol_amt  = _round_cents(vol_raw)
+        if has_grad_vol_pair:
+            grad_amt = next(i.recalculated_amount_cents for i in interpretations_list if i.interpretation_id == "graduated")
+            vol_amt = next(i.recalculated_amount_cents for i in interpretations_list if i.interpretation_id == "volume")
+            explanation_str = f"Ambiguous tier type. Graduated interpretation: {grad_amt}¢. Volume interpretation: {vol_amt}¢."
+            general_assumption = ["Tier type is ambiguous; human review required to select graduated or volume interpretation."]
+        else:
+            interp_summaries = ", ".join(f"{it.interpretation_id}: {it.recalculated_amount_cents}¢" for it in interpretations_list)
+            explanation_str = f"Conflicting primary contract rules on line item. Alternative scenarios: {interp_summaries}."
+            general_assumption = ["Multiple conflicting primary contract rules found on this line; human review required to select authoritative interpretation."]
 
         return LineCalculationResult(
             result_id=_compute_result_id(
-                line.line_id, grad_rule.rule_id, quantity, RuleType.TIERED_GRADUATED,
+                line.line_id, primary_rules[0].rule_id, max_quantity, primary_rules[0].rule_type,
                 rules=rules_for_line, original_amount_cents=line.original_amount_cents,
                 applied_discount_pct=applied_disc, applied_minimum_commit_cents=applied_commit
             ),
             line_id=line.line_id,
-            rule_id=grad_rule.rule_id,
+            rule_id=primary_rules[0].rule_id,
             original_amount_cents=line.original_amount_cents,
             recalculated_amount_cents=0,
             difference_cents=0,
             finding_type=FindingType.AMBIGUOUS,
-            quantity_used=quantity,
-            exempt_quantity=exempt_qty,
+            quantity_used=max_quantity,
+            exempt_quantity=max_exempt,
             quarantined_events=quarantined_all,
             applied_discount_pct=applied_disc,
             applied_minimum_commit_cents=applied_commit,
-            interpretations=[
-                InterpretationResult(
-                    interpretation_id="graduated",
-                    recalculated_amount_cents=grad_amt,
-                    assumptions=["Contract clause read as TIERED_GRADUATED: each tier's rate applies only to units within that band."],
-                    rule_id=grad_rule.rule_id,
-                    line_id=line.line_id,
-                ),
-                InterpretationResult(
-                    interpretation_id="volume",
-                    recalculated_amount_cents=vol_amt,
-                    assumptions=["Contract clause read as TIERED_VOLUME: all units priced at the rate of the tier the total quantity falls into."],
-                    rule_id=vol_rule.rule_id,
-                    line_id=line.line_id,
-                ),
-            ],
-            assumptions=["Tier type is ambiguous; human review required to select graduated or volume interpretation."],
-            explanation=f"Ambiguous tier type. Graduated interpretation: {grad_amt}¢. Volume interpretation: {vol_amt}¢.",
+            interpretations=interpretations_list,
+            assumptions=general_assumption,
+            explanation=explanation_str,
+            undisputed_overcharge_cents=undisputed_overcharge,
         )
 
     # ── 6. Single primary rule — normal path ──────────────────────────────────
@@ -711,8 +742,8 @@ def calculate_line(
                 line_id=line.line_id,
                 rule_id=primary.rule_id,
                 original_amount_cents=line.original_amount_cents,
-                recalculated_amount_cents=0,
-                difference_cents=0,
+                recalculated_amount_cents=None,
+                difference_cents=None,
                 finding_type=FindingType.INSUFFICIENT_DATA,
                 quantity_used=quantity,
                 exempt_quantity=exempt_qty,
@@ -732,8 +763,8 @@ def calculate_line(
                 line_id=line.line_id,
                 rule_id=primary.rule_id,
                 original_amount_cents=line.original_amount_cents,
-                recalculated_amount_cents=0,
-                difference_cents=0,
+                recalculated_amount_cents=None,
+                difference_cents=None,
                 finding_type=FindingType.INSUFFICIENT_DATA,
                 quantity_used=quantity,
                 exempt_quantity=exempt_qty,
@@ -859,8 +890,8 @@ def _make_insufficient_data_result(
         line_id=line.line_id,
         rule_id=rule_id,
         original_amount_cents=line.original_amount_cents,
-        recalculated_amount_cents=0,
-        difference_cents=0,
+        recalculated_amount_cents=None,
+        difference_cents=None,
         finding_type=FindingType.INSUFFICIENT_DATA,
         quantity_used=Decimal("0"),
         exempt_quantity=Decimal("0"),
@@ -967,11 +998,15 @@ def run_calculation(
         status = EngineStatus.OK
         reason = ""
 
-    # Total difference is the sum of line differences; unresolvable lines have difference_cents=0
-    # and do not produce phantom full refunds.
+    # Total difference is the sum of line differences; if any line is INSUFFICIENT_DATA,
+    # total recalculated is uncomputed / None rather than phantom $0.
     total_original = sum(r.original_amount_cents for r in line_results)
-    total_difference = sum(r.difference_cents for r in line_results)
-    total_recalculated = total_original + total_difference
+    if any_insufficient:
+        total_difference = None
+        total_recalculated = None
+    else:
+        total_difference = sum((r.difference_cents if r.difference_cents is not None else 0) for r in line_results)
+        total_recalculated = total_original + total_difference
 
     return EngineResult(
         status=status,

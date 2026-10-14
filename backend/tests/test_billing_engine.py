@@ -178,7 +178,8 @@ class TestPerUnit:
         rule = make_rule(RuleType.PER_UNIT, rate_cents=10)
         result = calculate_line(line, [rule], [])
         assert result.finding_type == FindingType.INSUFFICIENT_DATA
-        assert result.recalculated_amount_cents == 0
+        assert result.recalculated_amount_cents is None
+        assert result.difference_cents is None
 
     def test_all_quarantined_events_returns_insufficient_data(self):
         """When all usage events are quarantined, metered rule returns INSUFFICIENT_DATA."""
@@ -660,7 +661,8 @@ class TestRunCalculation:
         result = run_calculation([line1], [rule1], events)
         assert result.status == EngineStatus.INSUFFICIENT_DATA
         assert result.line_results[0].finding_type == FindingType.INSUFFICIENT_DATA
-        assert result.total_difference_cents == 0  # no phantom full refund
+        assert result.total_difference_cents is None  # no phantom full refund
+        assert result.total_recalculated_cents is None
 
     def test_ok_status_all_clean(self):
         line = make_line()
@@ -673,9 +675,9 @@ class TestRunCalculation:
         line = InvoiceLine("L1", "Unresolvable Line", original_amount_cents=3000)
         result = run_calculation([line], [], [])
         assert result.status == EngineStatus.INSUFFICIENT_DATA
-        assert result.line_results[0].difference_cents == 0
-        assert result.total_difference_cents == 0
-        assert result.total_recalculated_cents == 3000
+        assert result.line_results[0].difference_cents is None
+        assert result.total_difference_cents is None
+        assert result.total_recalculated_cents is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -835,5 +837,38 @@ class TestEngineRegressions:
         res = calculate_line(line, [primary, disc_none], [])
         assert res.finding_type == FindingType.INSUFFICIENT_DATA
         assert "missing discount percentage" in res.explanation
+
+    def test_ambiguous_line_computes_undisputed_minimum_overcharge(self):
+        """
+        Lines with competing TIERED_GRADUATED and TIERED_VOLUME clauses are AMBIGUOUS.
+        The engine must deterministically compute undisputed_overcharge_cents =
+        max(0, original_amount_cents - max(interpretations)).
+        Example: billed 4000, graduated=2500, volume=2000 -> undisputed overcharge = 1500.
+        """
+        line = make_line(original_cents=4000)
+        grad_rule = ContractRule(
+            rule_id="R_GRAD",
+            line_id=line.line_id,
+            rule_type=RuleType.TIERED_GRADUATED,
+            tiers=[
+                TierBand(up_to=100, price_per_unit_cents=15),
+                TierBand(up_to=None, price_per_unit_cents=10),
+            ],
+        )
+        vol_rule = ContractRule(
+            rule_id="R_VOL",
+            line_id=line.line_id,
+            rule_type=RuleType.TIERED_VOLUME,
+            tiers=[
+                TierBand(up_to=100, price_per_unit_cents=15),
+                TierBand(up_to=None, price_per_unit_cents=10),
+            ],
+        )
+        events = [make_event(qty=200)]
+        res = calculate_line(line, [grad_rule, vol_rule], events)
+        assert res.finding_type == FindingType.AMBIGUOUS
+        assert len(res.interpretations) == 2
+        assert res.undisputed_overcharge_cents == 1500
+
 
 

@@ -98,11 +98,28 @@ async function request(endpoint, options = {}) {
     ...options.headers,
   };
 
+  const timeoutMs = options.timeout ?? 120000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   const url = `${API_BASE}${endpoint}`;
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+      signal: options.signal || controller.signal,
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      const timeoutError = new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`);
+      timeoutError.status = 504;
+      throw timeoutError;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 
   const contentType = response.headers.get('content-type');
   let data = null;
@@ -194,4 +211,5 @@ export const approveCredit = (payload) => request('/api/credits/approve', {
 export const getCaseCredits = (caseId) => request(`/api/credits/case/${caseId}`);
 export const getCreditCap = (caseId, invoiceLineId) =>
   request(`/api/credits/case/${caseId}/cap?invoice_line_id=${encodeURIComponent(invoiceLineId)}`);
+export const resetDemoCases = () => request('/api/cases/reset-demo', { method: 'POST' });
 

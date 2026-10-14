@@ -1,7 +1,7 @@
 """
-tests/test_task9.py
-===================
-Tests for Task 9 items:
+tests/test_billing_period_and_provider_checks.py
+================================================
+Tests for billing period quarantine and provider checks:
 - Billing period quarantine (events outside period_start / period_end quarantined with 'Outside billing period')
 - No LLM provider configured returns HTTP 503
 - Finding review ordering: created_at.desc(), id.desc()

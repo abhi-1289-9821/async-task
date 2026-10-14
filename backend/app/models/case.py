@@ -30,6 +30,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     func,
@@ -71,6 +72,10 @@ class Case(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     customer_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    invoice_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="USD")
+    claimed_usage_quantity: Mapped[Optional[float]] = mapped_column(Numeric(20, 6), nullable=True)
+    claimed_usage_uom: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     disputed_amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     dispute_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(

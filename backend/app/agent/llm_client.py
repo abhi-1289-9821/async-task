@@ -224,16 +224,27 @@ def _mock_options(prompt: str, finding: dict[str, Any], state: dict[str, Any]) -
         ]
 
     if finding_type == "CONTRACT_AMBIGUITY":
-        return [
-            {
-                "option_type": "ESCALATE",
+        options = []
+        target_lr = next((lr for lr in state.get("line_results", []) if lr.get("id") == lr_id), None)
+        undisputed_amt = target_lr.get("undisputed_overcharge_cents") if target_lr else None
+        if target_lr and undisputed_amt and undisputed_amt > 0:
+            options.append({
+                "option_type": "CREDIT_UNDISPUTED_PORTION",
                 "description": (
-                    "Escalate to billing operations or legal counsel to determine the legally binding interpretation "
-                    "for the disputed tiered contract clause."
+                    f"Credit undisputed minimum overcharge of {undisputed_amt}¢ under every contract interpretation. "
+                    "Remainder awaits contract clarification."
                 ),
                 "calculation_line_result_id": lr_id,
-            }
-        ]
+            })
+        options.append({
+            "option_type": "ESCALATE",
+            "description": (
+                "Escalate to billing operations or legal counsel to determine the legally binding interpretation "
+                "for the disputed tiered contract clause."
+            ),
+            "calculation_line_result_id": lr_id,
+        })
+        return options
 
     if finding_type == "INSUFFICIENT_EVIDENCE":
         return [

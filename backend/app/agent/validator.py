@@ -116,7 +116,7 @@ def derive_engine_finding_type(
         return "CONTRACT_AMBIGUITY"
 
     # 3. Else any overcharge (difference_cents < 0 means customer was billed more than recalculated)
-    if any(lr.get("difference_cents", 0) < 0 for lr in line_results):
+    if any(lr.get("difference_cents") is not None and lr.get("difference_cents") < 0 for lr in line_results):
         return "CONFIRMED_CALCULATION_DISCREPANCY"
 
     # 4. Else NO_DISCREPANCY
@@ -136,7 +136,7 @@ def generate_engine_narrative(
         lines_desc = ", ".join(ambig_lines) if ambig_lines else "disputed line items"
         return f"Deterministic billing engine identified competing contract interpretations for {lines_desc}. Recalculated amount cannot be finalized until a reviewer chooses an interpretation."
     elif engine_finding_type == "CONFIRMED_CALCULATION_DISCREPANCY":
-        overcharged = [lr for lr in line_results if lr.get("difference_cents", 0) < 0]
+        overcharged = [lr for lr in line_results if lr.get("difference_cents") is not None and lr.get("difference_cents") < 0]
         total_overcharge = sum(abs(lr.get("difference_cents", 0)) for lr in overcharged)
         lines_summary = ", ".join(f"{lr.get('line_id')} (billed {lr.get('original_amount_cents')}¢, recalculated {lr.get('recalculated_amount_cents')}¢)" for lr in overcharged)
         return f"Deterministic billing engine confirmed an overcharge totaling {total_overcharge}¢ across line item(s): {lines_summary}. Discrepancy is eligible for credit approval."
@@ -207,6 +207,21 @@ def sanitize_resolution_options(
                     lr.get("difference_cents") if lr else "None",
                 )
                 continue
+        elif opt_type == "CREDIT_UNDISPUTED_PORTION":
+            if finding_type != "CONTRACT_AMBIGUITY":
+                logger.warning(
+                    "Rejected CREDIT_UNDISPUTED_PORTION option: finding_type is '%s' (only CONTRACT_AMBIGUITY can credit undisputed portion)",
+                    finding_type,
+                )
+                continue
+            lr = line_results_by_id.get(lr_id)
+            undisputed_amt = lr.get("undisputed_overcharge_cents") if lr else None
+            if not lr or not undisputed_amt or undisputed_amt <= 0:
+                logger.warning(
+                    "Rejected CREDIT_UNDISPUTED_PORTION option: line_result_id %s has no positive undisputed overcharge",
+                    lr_id,
+                )
+                continue
         elif lr_id not in line_results_by_id:
             lr_id = None
 
@@ -215,6 +230,19 @@ def sanitize_resolution_options(
             "description": description,
             "calculation_line_result_id": lr_id,
         })
+
+    if finding_type == "CONTRACT_AMBIGUITY":
+        has_credit_undisputed = any(o.get("option_type") == "CREDIT_UNDISPUTED_PORTION" for o in sanitized)
+        if not has_credit_undisputed:
+            for lr in line_results:
+                undisputed = lr.get("undisputed_overcharge_cents")
+                if undisputed and undisputed > 0:
+                    sanitized.insert(0, {
+                        "option_type": "CREDIT_UNDISPUTED_PORTION",
+                        "description": f"Credit undisputed portion of {undisputed}¢ (billed amount exceeds highest contract interpretation); remainder awaits contract clarification.",
+                        "calculation_line_result_id": lr.get("id"),
+                    })
+                    break
 
     if not sanitized:
         if finding_type == "CONTRACT_AMBIGUITY":
@@ -325,36 +353,46 @@ def validate_narrative_amounts(
     allowed_rate_cents = set()
 
     for lr in line_results:
-        allowed_cents.add(lr.get("original_amount_cents", 0))
-        allowed_cents.add(lr.get("recalculated_amount_cents", 0))
-        allowed_cents.add(abs(lr.get("difference_cents", 0)))
+        if lr.get("original_amount_cents") is not None:
+            allowed_cents.add(lr["original_amount_cents"])
+        if lr.get("recalculated_amount_cents") is not None:
+            allowed_cents.add(lr["recalculated_amount_cents"])
+        if lr.get("difference_cents") is not None:
+            allowed_cents.add(abs(lr["difference_cents"]))
         if lr.get("applied_minimum_commit_cents"):
             allowed_cents.add(lr["applied_minimum_commit_cents"])
         for interp in lr.get("interpretations") or []:
             if isinstance(interp, dict):
                 amt = interp.get("recalculated_amount_cents", 0)
-                allowed_cents.add(amt)
-                allowed_cents.add(abs(amt - lr.get("original_amount_cents", 0)))
+                if amt is not None:
+                    allowed_cents.add(amt)
+                    if lr.get("original_amount_cents") is not None:
+                        allowed_cents.add(abs(amt - lr["original_amount_cents"]))
 
     for rule in (contract_rules or []):
         r_rate = rule.get("rate_cents", 0)
-        allowed_cents.add(r_rate)
-        allowed_rate_cents.add(r_rate)
-        if rule.get("overage_rate_cents"):
+        if r_rate is not None:
+            allowed_cents.add(r_rate)
+            allowed_rate_cents.add(r_rate)
+        if rule.get("overage_rate_cents") is not None:
             allowed_cents.add(rule["overage_rate_cents"])
             allowed_rate_cents.add(rule["overage_rate_cents"])
-        if rule.get("minimum_commit_cents"):
+        if rule.get("minimum_commit_cents") is not None:
             allowed_cents.add(rule["minimum_commit_cents"])
         for tier in rule.get("tiers") or []:
             if isinstance(tier, dict):
                 t_price = tier.get("price_per_unit_cents", 0) or tier.get("rate_cents", 0)
-                allowed_cents.add(t_price)
-                allowed_rate_cents.add(t_price)
+                if t_price is not None:
+                    allowed_cents.add(t_price)
+                    allowed_rate_cents.add(t_price)
 
     if summary:
-        allowed_cents.add(summary.get("total_original_billed_cents", 0))
-        allowed_cents.add(summary.get("total_recalculated_cents", 0))
-        allowed_cents.add(abs(summary.get("total_difference_cents", 0)))
+        if summary.get("total_original_billed_cents") is not None:
+            allowed_cents.add(summary["total_original_billed_cents"])
+        if summary.get("total_recalculated_cents") is not None:
+            allowed_cents.add(summary["total_recalculated_cents"])
+        if summary.get("total_difference_cents") is not None:
+            allowed_cents.add(abs(summary["total_difference_cents"]))
 
     texts_to_scan = []
     if finding.get("raw_ai_text"):

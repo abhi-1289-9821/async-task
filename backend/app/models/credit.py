@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -53,6 +54,7 @@ class Credit(Base):
     __tablename__ = "credits"
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_credits_idempotency_key"),
+        UniqueConstraint("finding_id", name="uq_credits_finding_id"),
         CheckConstraint("amount_cents > 0", name="check_credit_amount_positive"),
         ForeignKeyConstraint(
             ["case_id", "invoice_line_id"],
@@ -66,6 +68,9 @@ class Credit(Base):
         String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True
     )
     invoice_line_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    finding_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("findings.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     resolution_option_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("resolution_options.id", ondelete="SET NULL"), nullable=True
     )
@@ -109,6 +114,8 @@ class Adjustment(Base):
     )
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    evidence_source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 

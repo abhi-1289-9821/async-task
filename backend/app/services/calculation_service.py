@@ -185,6 +185,7 @@ def execute_case_calculation(
             assumptions=lr.assumptions,
             explanation=lr.explanation,
             quarantined_events=quarantined_data,
+            undisputed_overcharge_cents=lr.undisputed_overcharge_cents,
         )
         db.add(db_lr)
 

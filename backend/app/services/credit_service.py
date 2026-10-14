@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 from app.models.case import Case, CaseEvent
 from app.models.invoice import InvoiceLine
 from app.models.investigation import Finding, FindingReview, ResolutionOption
-from app.models.calculation import Calculation, CalculationLineResult
+from app.models.calculation import Calculation, CalculationLineResult, FindingTypeDB
 from app.models.credit import Credit, Adjustment
 
 
@@ -69,29 +69,51 @@ def compute_remaining_cap(
     the GET /cap endpoint (for display), ensuring the UI and the approval
     gate always show the same number.
     """
-    eligible_overcharge = abs(line_result.difference_cents)
+    if line_result.difference_cents is None:
+        eligible_overcharge = 0
+    elif getattr(line_result, "undisputed_overcharge_cents", None) and (
+        line_result.difference_cents == 0 or getattr(line_result, "finding_type", None) in ("AMBIGUOUS", FindingTypeDB.AMBIGUOUS)
+    ):
+        eligible_overcharge = line_result.undisputed_overcharge_cents
+    else:
+        eligible_overcharge = abs(line_result.difference_cents) if line_result.difference_cents < 0 else 0
 
     prior_credits = int(
         db.query(func.coalesce(func.sum(Credit.amount_cents), 0))
-        .filter(Credit.invoice_line_id == invoice_line_id)
+        .filter(
+            Credit.case_id == case_id,
+            Credit.invoice_line_id == invoice_line_id,
+        )
         .scalar()
     )
 
+    # Only verified adjustments count against the confirmed credit cap
     line_adjustments = int(
         db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
         .filter(
             Adjustment.case_id == case_id,
             Adjustment.invoice_line_id == invoice_line_id,
+            Adjustment.is_verified == True,  # noqa: E712
         )
         .scalar()
     )
-    line_cap = eligible_overcharge - prior_credits - line_adjustments
+    line_cap = max(0, eligible_overcharge - prior_credits - line_adjustments)
 
     case_wide_adjustments = int(
         db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
         .filter(
             Adjustment.case_id == case_id,
             Adjustment.invoice_line_id.is_(None),
+            Adjustment.is_verified == True,  # noqa: E712
+        )
+        .scalar()
+    )
+
+    unverified_adjustments = int(
+        db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
+        .filter(
+            Adjustment.case_id == case_id,
+            Adjustment.is_verified == False,  # noqa: E712
         )
         .scalar()
     )
@@ -119,7 +141,7 @@ def compute_remaining_cap(
             )
             .scalar()
         )
-        case_cap = total_case_overcharge - all_case_credits - case_wide_adjustments
+        case_cap = max(0, total_case_overcharge - all_case_credits - case_wide_adjustments)
         remaining_cap = min(line_cap, case_cap)
     else:
         remaining_cap = line_cap
@@ -129,6 +151,7 @@ def compute_remaining_cap(
         "prior_credits_cents": prior_credits,
         "line_adjustments_cents": line_adjustments,
         "case_wide_adjustments_cents": case_wide_adjustments,
+        "unverified_adjustments_cents": unverified_adjustments,
         "remaining_cap_cents": remaining_cap,
     }
 
@@ -225,7 +248,16 @@ def approve_credit(
             detail="Finding is stale due to new evidence. Rerun investigation before approving credit.",
         )
 
+    # Guard: A finding can only receive one credit approval
+    existing_finding_credit = db.query(Credit).filter(Credit.finding_id == finding_id).first()
+    if existing_finding_credit:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Credit already approved for finding '{finding_id}'",
+        )
+
     # ── 3b. Validate Resolution Option (if supplied) ───────────────────────────
+    res_opt = None
     if resolution_option_id:
         res_opt = (
             db.query(ResolutionOption)
@@ -247,10 +279,10 @@ def approve_credit(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"ResolutionOption '{resolution_option_id}' is stale. Rerun investigation before approving credit.",
             )
-        if res_opt.option_type != "RECOMMEND_CREDIT":
+        if res_opt.option_type not in ("RECOMMEND_CREDIT", "CREDIT_UNDISPUTED_PORTION"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"ResolutionOption type is '{res_opt.option_type}', expected 'RECOMMEND_CREDIT'",
+                detail=f"ResolutionOption type is '{res_opt.option_type}', expected 'RECOMMEND_CREDIT' or 'CREDIT_UNDISPUTED_PORTION'",
             )
         if (
             res_opt.calculation_line_result_id is not None
@@ -281,21 +313,30 @@ def approve_credit(
     if finding.citation_validation_passed is False:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Credit approval requires finding with valid citations (citation_validation_passed=False)",
+            detail="Credit approval requires finding with valid citations (citation validation failed)",
         )
 
     if finding.consistency_check_passed is False:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Credit approval requires finding that passed consistency check (consistency_check_passed=False)",
+            detail="Credit approval requires finding that passed consistency check (consistency check failed)",
         )
 
-    # Invariant: Only confirmed calculation discrepancies can receive credit approvals
-    if finding.finding_type != "CONFIRMED_CALCULATION_DISCREPANCY":
+    # Invariant: Only confirmed discrepancies or CREDIT_UNDISPUTED_PORTION for ambiguities can receive credit
+    is_undisputed_credit = bool(res_opt and res_opt.option_type == "CREDIT_UNDISPUTED_PORTION")
+    if not is_undisputed_credit and finding.finding_type != "CONFIRMED_CALCULATION_DISCREPANCY":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"Credit approval requires finding type CONFIRMED_CALCULATION_DISCREPANCY, "
+                f"but finding is '{finding.finding_type}'"
+            ),
+        )
+    if is_undisputed_credit and finding.finding_type not in ("CONTRACT_AMBIGUITY", "CONFIRMED_CALCULATION_DISCREPANCY"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"CREDIT_UNDISPUTED_PORTION requires finding type CONTRACT_AMBIGUITY, "
                 f"but finding is '{finding.finding_type}'"
             ),
         )
@@ -318,16 +359,58 @@ def approve_credit(
             detail=f"CalculationLineResult '{finding.calculation_line_result_id}' not found",
         )
 
-    # Invariant: Calculation line result must also be CONFIRMED_CALCULATION_DISCREPANCY
-    lr_finding_type = line_result.finding_type.value if hasattr(line_result.finding_type, "value") else str(line_result.finding_type)
-    if lr_finding_type != "CONFIRMED_CALCULATION_DISCREPANCY":
+    calc = db.query(Calculation).filter(Calculation.id == line_result.calculation_id).first()
+    if not calc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Calculation '{line_result.calculation_id}' not found",
+        )
+    if calc.evidence_version != case.evidence_version:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"Credit approval requires calculation line result finding type CONFIRMED_CALCULATION_DISCREPANCY, "
-                f"but line result is '{lr_finding_type}'"
+                f"Calculation result is from evidence version {calc.evidence_version}, "
+                f"but case is currently at evidence version {case.evidence_version}. "
+                "Rerun calculation on current evidence before approving credit."
             ),
         )
+
+    lr_finding_type = line_result.finding_type.value if hasattr(line_result.finding_type, "value") else str(line_result.finding_type)
+    if lr_finding_type == "INSUFFICIENT_DATA" or line_result.difference_cents is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot approve credit: Calculation line has insufficient usage evidence (uncomputed amount).",
+        )
+
+    if is_undisputed_credit:
+        if lr_finding_type not in ("AMBIGUOUS", "CONFIRMED_CALCULATION_DISCREPANCY"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"CREDIT_UNDISPUTED_PORTION requires calculation line result finding type AMBIGUOUS, but line result is '{lr_finding_type}'",
+            )
+        undisputed_amt = getattr(line_result, "undisputed_overcharge_cents", 0) or 0
+        if undisputed_amt <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Calculation result shows no undisputed overcharge on this line item",
+            )
+    else:
+        # Invariant: Calculation line result must also be CONFIRMED_CALCULATION_DISCREPANCY
+        if lr_finding_type != "CONFIRMED_CALCULATION_DISCREPANCY":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Credit approval requires calculation line result finding type CONFIRMED_CALCULATION_DISCREPANCY, "
+                    f"but line result is '{lr_finding_type}'"
+                ),
+            )
+
+        # Overcharge: difference_cents is negative (recalculated - original)
+        if line_result.difference_cents >= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Calculation result shows no overcharge on this line item",
+            )
 
     # Invariant: Line in calculation result must match the requested invoice_line_id
     if line_result.line_id != invoice_line_id:
@@ -337,13 +420,6 @@ def approve_credit(
                 f"Invoice line mismatch: finding calculation result is for line '{line_result.line_id}', "
                 f"but credit was requested for line '{invoice_line_id}'"
             ),
-        )
-
-    # Overcharge: difference_cents is negative (recalculated - original)
-    if line_result.difference_cents >= 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Calculation result shows no overcharge on this line item",
         )
 
     eligible_overcharge = abs(line_result.difference_cents)
@@ -390,6 +466,7 @@ def approve_credit(
         id=f"cred_{uuid.uuid4().hex[:12]}",
         case_id=case_id,
         invoice_line_id=invoice_line_id,
+        finding_id=finding_id,
         resolution_option_id=resolution_option_id,
         calculation_line_result_id=finding.calculation_line_result_id,
         idempotency_key=idempotency_key,
@@ -427,6 +504,12 @@ def approve_credit(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Credit already approved with idempotency key {idempotency_key}",
+            )
+        existing_finding = db.query(Credit).filter(Credit.finding_id == finding_id).first()
+        if existing_finding:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Credit already approved for finding '{finding_id}'",
             )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

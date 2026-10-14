@@ -81,12 +81,27 @@ class AdjustmentCreate(BaseModel):
     amount_cents: int = Field(..., ge=0)
     description: str = Field(..., min_length=1)
     applied_at: Optional[datetime] = None
+    is_verified: bool = True
+    evidence_source: Optional[str] = Field(None, max_length=255)
+
+
+class UsageEventCreate(BaseModel):
+    id: Optional[str] = Field(None, max_length=64)
+    line_id: str = Field(..., min_length=1, max_length=36)
+    quantity: float = Field(..., ge=0)
+    environment: str = Field(default="production", max_length=50)
+    event_timestamp: Optional[datetime] = None
 
 
 class CaseCreate(BaseModel):
     id: Optional[str] = Field(None, max_length=36)
     title: str = Field(..., min_length=3, max_length=255)
     customer_name: str = Field(..., min_length=1, max_length=100)
+    invoice_id: Optional[str] = Field(None, max_length=64)
+    currency: str = Field(default="USD", max_length=10)
+    claimed_usage_quantity: Optional[float] = Field(None, ge=0)
+    claimed_usage_uom: Optional[str] = Field(None, max_length=50)
+    evidence_source: Optional[str] = Field(None, max_length=255)
     disputed_amount_cents: int = Field(..., ge=0)
     dispute_description: Optional[str] = Field(None, max_length=5000)
     period_start: Optional[datetime] = None
@@ -94,9 +109,12 @@ class CaseCreate(BaseModel):
     invoice_lines: list[InvoiceLineCreate] = Field(default_factory=list)
     contract_rules: list[ContractRuleCreate] = Field(default_factory=list)
     adjustments: list[AdjustmentCreate] = Field(default_factory=list)
+    usage_events: list[UsageEventCreate] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_case_references(self) -> "CaseCreate":
+        if self.period_start and self.period_end and self.period_start > self.period_end:
+            raise ValueError("Billing period start date must be before or equal to end date")
         line_ids = {l.id for l in self.invoice_lines}
         for r in self.contract_rules:
             if r.line_id not in line_ids:
@@ -107,6 +125,11 @@ class CaseCreate(BaseModel):
             if adj.invoice_line_id is not None and adj.invoice_line_id not in line_ids:
                 raise ValueError(
                     f"Adjustment '{adj.id}' references invoice_line_id '{adj.invoice_line_id}' which does not exist in invoice_lines"
+                )
+        for ev in self.usage_events:
+            if ev.line_id not in line_ids:
+                raise ValueError(
+                    f"Usage event '{ev.id or 'new'}' references line_id '{ev.line_id}' which does not exist in invoice_lines"
                 )
         return self
 
@@ -166,6 +189,8 @@ class AdjustmentResponse(BaseModel):
     amount_cents: int
     description: str
     applied_at: Optional[datetime] = None
+    is_verified: bool = True
+    evidence_source: Optional[str] = None
     created_at: datetime
 
 
@@ -175,6 +200,10 @@ class CaseResponse(BaseModel):
     id: str
     title: str
     customer_name: str
+    invoice_id: Optional[str] = None
+    currency: str = "USD"
+    claimed_usage_quantity: Optional[float] = None
+    claimed_usage_uom: Optional[str] = None
     disputed_amount_cents: int
     dispute_description: Optional[str] = None
     period_start: Optional[datetime] = None

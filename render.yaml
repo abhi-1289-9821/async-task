@@ -3,7 +3,8 @@ services:
     name: billing-dispute-agent
     runtime: python
     buildCommand: cd frontend && npm ci && npm run build && cd .. && pip install -r backend/requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --app-dir backend
+    preDeployCommand: cd backend && alembic upgrade head
+    startCommand: cd backend && alembic upgrade head && cd .. && uvicorn app.main:app --host 0.0.0.0 --port $PORT --app-dir backend
     healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION

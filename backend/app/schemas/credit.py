@@ -15,6 +15,7 @@ class CreditCapResponse(BaseModel):
     prior_credits_cents: int
     line_adjustments_cents: int
     case_wide_adjustments_cents: int
+    unverified_adjustments_cents: int = 0
     remaining_cap_cents: int
 
 
@@ -35,6 +36,7 @@ class CreditResponse(BaseModel):
     id: str
     case_id: str
     invoice_line_id: str
+    finding_id: Optional[str] = None
     resolution_option_id: Optional[str] = None
     calculation_line_result_id: Optional[int] = None
     idempotency_key: str

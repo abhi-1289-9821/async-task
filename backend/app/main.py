@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Billing Dispute Investigation & Resolution Agent",
+    title="FairBill: Billing Dispute Investigation & Resolution Platform",
     description="Deterministic billing calculation and AI-assisted dispute resolution platform",
     version=settings.app_version,
     lifespan=lifespan,
@@ -145,7 +145,7 @@ else:
     @app.get("/", tags=["health"])
     def root():
         return {
-            "name": "Billing Dispute Resolution API",
+            "name": "FairBill API",
             "version": settings.app_version,
             "status": "online",
             "docs": "/docs",

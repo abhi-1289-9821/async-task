@@ -42,7 +42,7 @@ export default function Navbar({ onSelectCase, activeCaseId }) {
           <Cpu size={22} />
         </div>
         <div>
-          <div className="brand-title">DisputeIQ Agent</div>
+          <div className="brand-title">FairBill</div>
           <div className="brand-subtitle">Autonomous Billing Audit & Governance</div>
         </div>
       </div>

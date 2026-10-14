@@ -507,12 +507,14 @@ def calculate_line(
         )
 
     # Engine-level input validation for discount rules
-    if discount_rules and (discount_rules[0].discount_pct < Decimal("0") or discount_rules[0].discount_pct > Decimal("100")):
-        return _make_insufficient_data_result(
-            line, discount_rules[0].rule_id,
-            f"Invalid discount percentage {discount_rules[0].discount_pct}% (must be between 0 and 100)",
-            quarantined_all,
-        )
+    if discount_rules:
+        d_pct = discount_rules[0].discount_pct
+        if d_pct.is_nan() or d_pct.is_infinite() or d_pct < Decimal("0") or d_pct > Decimal("100"):
+            return _make_insufficient_data_result(
+                line, discount_rules[0].rule_id,
+                f"Invalid discount percentage {d_pct}% (must be finite between 0 and 100)",
+                quarantined_all,
+            )
 
     # Engine-level input validation for tiered rules
     for r in primary_rules:
@@ -529,9 +531,9 @@ def calculate_line(
                     )
                 if t.up_to is not None:
                     bound = Decimal(t.up_to)
-                    if bound <= prev_bound:
+                    if bound.is_nan() or bound.is_infinite() or bound <= prev_bound:
                         return _make_insufficient_data_result(
-                            line, r.rule_id, f"Tiers must have strictly increasing upper bounds ({bound} <= {prev_bound})", quarantined_all
+                            line, r.rule_id, f"Tiers must have strictly increasing finite upper bounds ({bound} <= {prev_bound})", quarantined_all
                         )
                     prev_bound = bound
 
@@ -801,6 +803,32 @@ def _make_ambiguous_result(
         interpretations=[],
         assumptions=assumptions,
         explanation=f"AMBIGUOUS: {reason}",
+    )
+
+
+def _make_insufficient_data_result(
+    line: InvoiceLine,
+    rule_id: str,
+    reason: str,
+    quarantined_events: list[QuarantinedEvent] | None = None,
+) -> LineCalculationResult:
+    """Helper: build a LineCalculationResult with INSUFFICIENT_DATA finding_type."""
+    return LineCalculationResult(
+        result_id=_compute_result_id(line.line_id, rule_id, Decimal("0"), RuleType.FLAT, original_amount_cents=line.original_amount_cents),
+        line_id=line.line_id,
+        rule_id=rule_id,
+        original_amount_cents=line.original_amount_cents,
+        recalculated_amount_cents=0,
+        difference_cents=0,
+        finding_type=FindingType.INSUFFICIENT_DATA,
+        quantity_used=Decimal("0"),
+        exempt_quantity=Decimal("0"),
+        quarantined_events=quarantined_events or [],
+        applied_discount_pct=Decimal("0"),
+        applied_minimum_commit_cents=0,
+        interpretations=[],
+        assumptions=[reason],
+        explanation=f"Cannot recalculate: {reason}",
     )
 
 

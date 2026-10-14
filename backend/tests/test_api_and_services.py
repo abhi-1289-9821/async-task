@@ -969,5 +969,58 @@ class TestCreditApprovalAndConcurrencyCap:
             event_types = [e.event_type for e in events]
             assert "INVESTIGATION_RUN_FAILED" in event_types
 
+    def test_repeat_investigation_returns_409_if_already_running(
+        self, client_and_session
+    ):
+        """Repeat-run guard: triggers 409 if an investigation is currently in RUNNING status."""
+        client, SessionLocal = client_and_session
+        client.post(
+            "/api/cases",
+            headers=REVIEWER_HEADERS,
+            json={
+                "id": "case-repeat-run",
+                "title": "Repeat Run Test",
+                "customer_name": "Acme Inc",
+                "disputed_amount_cents": 5000,
+                "invoice_lines": [{"id": "line-rep-1", "description": "API requests", "original_amount_cents": 5000}],
+            },
+        )
+
+        with SessionLocal() as db:
+            from app.models.investigation import InvestigationRun, RunStatus
+            run_obj = InvestigationRun(
+                id="run-active-123",
+                case_id="case-repeat-run",
+                evidence_version=1,
+                status=RunStatus.RUNNING,
+                status_reason="In progress",
+            )
+            db.add(run_obj)
+            db.commit()
+
+        res = client.post(
+            "/api/cases/case-repeat-run/investigations",
+            headers=REVIEWER_HEADERS,
+        )
+        assert res.status_code == 409
+        assert "already currently running" in res.json()["detail"]
+
+    def test_case_create_rejects_nan_discount(self, client_and_session):
+        """Schema validation rejects NaN or non-finite discount_pct."""
+        client, _ = client_and_session
+        raw_json = (
+            '{"id": "case-nan-disc", "title": "NaN Test", "customer_name": "Test Co", '
+            '"disputed_amount_cents": 1000, "invoice_lines": [{"id": "line-1", "description": "L1", "original_amount_cents": 1000}], '
+            '"contract_rules": [{"id": "rule-1", "line_id": "line-1", "rule_type": "PER_UNIT", "discount_pct": NaN}]}'
+        )
+        res = client.post(
+            "/api/cases",
+            headers={"Content-Type": "application/json", **REVIEWER_HEADERS},
+            content=raw_json,
+        )
+        assert res.status_code == 422
+
+
+
 
 

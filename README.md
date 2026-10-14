@@ -25,7 +25,7 @@ A full-stack AI-assisted application designed to investigate, recalculate, and r
 - [Known Limitations](#-known-limitations)
 - [API Routes](#-api-routes)
 - [Deployment](#-deployment)
-- [Test Suite & Verification (98 Passing Tests)](#-test-suite--verification-98-passing-tests)
+- [Test Suite & Verification (119 Passing Tests, 1 Skipped)](#-test-suite--verification-119-passing-tests-1-skipped)
 - [Quickstart & Local Setup](#-quickstart--local-setup)
 - [Implementation Roadmap](#-implementation-roadmap)
 - [Documentation & Engineering Logs](#-documentation--engineering-logs)
@@ -163,6 +163,9 @@ Implemented in [`backend/app/agent/`](backend/app/agent/):
   - Structured JSON logging (`logger="llm"`) with run ID, provider, model, attempt, latency, status, error type, and token counts. API keys, Authorization headers, and prompts are never logged.
   - Diagnostic CLI probe: `python backend/scripts/check_llm.py` pings all configured providers and reports latency/status without printing secrets.
   - Configuration status probe: `GET /api/llm/status` (any authenticated role) reports `configured` (bool) and model per provider.
+- **Data Flow & Multi-Vendor Privacy Notice:**
+  - Customer dispute descriptions and anonymized calculation metrics are transmitted to the active provider in `LLM_PROVIDERS` (Google Gemini, Groq, OpenRouter) for narrative analysis.
+  - Organizations with strict single-vendor data residency can set `LLM_PROVIDERS=gemini` to restrict processing exclusively to Google infrastructure.
 
 ### 9. Frontend Audit Workspace (Phase 4)
 Implemented in [`frontend/`](frontend/):
@@ -223,7 +226,7 @@ To maintain project focus and feasibility, the following areas are explicitly ou
 
 ---
 
-## 🧪 Test Suite & Verification (112 Passing Tests, 1 Skipped)
+## 🧪 Test Suite & Verification (119 Passing Tests, 1 Skipped)
 
 The test suite runs under `pytest`:
 
@@ -231,14 +234,14 @@ The test suite runs under `pytest`:
 LLM_MODE=mock pytest -v
 ```
 
-### Breakdown of Test Results:
-- `test_billing_engine.py`: 55 tests (pure deterministic arithmetic, tiers, included units, rounding, commitments, exemptions, quarantine)
+### Breakdown of Test Results (119 Passing Tests):
+- `test_billing_engine.py`: 60 tests (pure deterministic arithmetic, tiers, included units, rounding, commitments, exemptions, quarantine, engine input guards, non-finite quantity isolation)
 - `test_models_and_db.py`: 10 tests (schema, foreign keys, append-only triggers, unique constraints, check constraints)
-- `test_api_and_services.py`: 23 tests (case CRUD, evidence versioning, calculation API, human reviews, credit approval caps, idempotency)
+- `test_api_and_services.py`: 25 tests (case CRUD, evidence versioning, calculation API, human reviews, credit approval caps, idempotency, repeat-run 409 guard, non-finite payload validation)
 - `test_agent.py`: 13 tests (LangGraph workflow, gates, prompt injection defense, citation validation, consistency checks)
 - `test_concurrency.py`: 2 tests (10 concurrent threads hammering credit approvals, PostgreSQL SELECT FOR UPDATE test)
 - `test_llm_resilience.py`: 9 tests (Gemini 429 quota fallback to Groq, 500 fallback to OpenRouter, 404 skips, invalid JSON fallback, response_format retry, secret isolation, HTTP 502 failure response, GET /api/llm/status)
-- **Pricing & Calculation Logic (58 tests in [`backend/tests/test_billing_engine.py`](backend/tests/test_billing_engine.py)):**
+- **Pricing & Calculation Logic (60 tests in [`backend/tests/test_billing_engine.py`](backend/tests/test_billing_engine.py)):**
   - Boundary rounding (`ROUND_HALF_UP`, half-away-from-zero).
   - Flat, per-unit, tiered graduated, and tiered volume calculations.
   - Included units with overage rate application.
@@ -346,4 +349,4 @@ npm run dev
 ## 📚 Documentation & Engineering Logs
 
 - **Engineering Audit Log:** [`docs/agent_log.md`](docs/agent_log.md) records all development decisions, dependency adjustments, and test corrections chronologically.
-- **Agent Usage Guide:** Available in [`docs/AGENT_USAGE.md`](docs/AGENT_USAGE.md) detailing architecture, security controls, and operational workflows.
+- **Agent Usage Guide:** Available in [`AGENT_USAGE.md`](AGENT_USAGE.md) detailing architecture, prompt records, delegated work, agent mistakes, and verification methodology.

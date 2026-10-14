@@ -49,6 +49,21 @@ def trigger_investigation(
             detail=f"Case '{case_id}' not found",
         )
 
+    # Repeat-run guard: reject concurrent investigation runs for the same case
+    active_run = (
+        db.query(InvestigationRun)
+        .filter(
+            InvestigationRun.case_id == case_id,
+            InvestigationRun.status == RunStatus.RUNNING,
+        )
+        .first()
+    )
+    if active_run:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"An investigation run ({active_run.id}) is already currently running for case '{case_id}'",
+        )
+
     db_run = run_investigation(
         db=db,
         case_id=case_id,

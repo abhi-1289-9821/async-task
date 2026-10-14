@@ -141,7 +141,8 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
       await loadAllCaseData();
       setActiveTab('investigation');
     } catch (err) {
-      onToast('error', err.message || 'Investigation run failed');
+      const reason = err.data?.reason || err.data?.status_reason || err.message || 'Investigation run failed';
+      onToast('error', `Investigation Failed (${err.status || 502}): ${reason}`);
     } finally {
       setActionLoading(false);
     }

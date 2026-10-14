@@ -68,7 +68,7 @@ async function request(endpoint, options = {}) {
   }
 
   if (!response.ok) {
-    const errorMsg = data?.detail || data?.message || response.statusText || 'Request failed';
+    const errorMsg = data?.reason || data?.status_reason || data?.detail || data?.message || response.statusText || 'Request failed';
     const error = new Error(errorMsg);
     error.status = response.status;
     error.data = data;

@@ -151,7 +151,21 @@ export default function CaseList({ cases, onSelectCase, onOpenCreateModal }) {
             </tr>
           </thead>
           <tbody>
-            {filteredCases.length === 0 ? (
+            {cases.length === 0 ? (
+              <tr>
+                <td colSpan="8" style={{ textAlign: 'center', padding: '3.5rem 1rem', color: 'var(--text-muted)' }}>
+                  <Layers size={36} style={{ margin: '0 auto 0.75rem auto', opacity: 0.4, display: 'block' }} />
+                  <div style={{ fontSize: '1.05rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '0.4rem' }}>No Dispute Cases in Database</div>
+                  <p style={{ fontSize: '0.85rem', maxWidth: 420, margin: '0 auto 1.25rem auto' }}>
+                    Create your first dispute or load pre-configured scenario presets to test deterministic billing and AI resolution.
+                  </p>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={onOpenCreateModal} aria-label="Create First Dispute Case">
+                    <Plus size={14} />
+                    <span>Create Dispute Case</span>
+                  </button>
+                </td>
+              </tr>
+            ) : filteredCases.length === 0 ? (
               <tr>
                 <td colSpan="8" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
                   No dispute cases match the selected filters.

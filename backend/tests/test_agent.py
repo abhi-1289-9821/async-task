@@ -465,6 +465,16 @@ class TestValidators:
         assert len(errors) >= 2
         assert any("$99.99" in e for e in errors)
 
+        # 3. Fabricated narrative with USD or dollars suffix (e.g. 5,000 USD) fails
+        usd_hallucinated_finding = {
+            "raw_ai_text": "We recommend a payout of 5,000 USD and 5000 dollars for billing error.",
+            "verified_facts": ["Customer demands 5000 USD."],
+        }
+        passed_usd, errors_usd = validate_narrative_amounts(usd_hallucinated_finding, line_results, summary)
+        assert passed_usd is False
+        assert len(errors_usd) >= 2
+
+
 
 class TestFullLifecycleIntegration:
     def test_investigation_review_and_credit_approval_pipeline(self, client_and_session):

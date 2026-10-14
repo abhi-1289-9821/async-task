@@ -744,3 +744,63 @@ class TestEngineRegressions:
         assert res_base.result_id != res_commit.result_id
         assert res_disc.result_id != res_commit.result_id
 
+    def test_empty_tiers_returns_insufficient_data(self):
+        """Tiered rule with empty tiers must return INSUFFICIENT_DATA without crashing."""
+        line = make_line()
+        rule = make_rule(RuleType.TIERED_GRADUATED, tiers=[], rule_id="R_EMPTY")
+        res = calculate_line(line, [rule], [make_event(qty=10)])
+        assert res.finding_type == FindingType.INSUFFICIENT_DATA
+        assert "empty or missing tiers" in res.explanation
+
+    def test_negative_tier_rate_returns_insufficient_data(self):
+        """Tiered rule with negative rate must return INSUFFICIENT_DATA without crashing."""
+        line = make_line()
+        tiers = [TierBand(up_to=None, price_per_unit_cents=-10)]
+        rule = make_rule(RuleType.TIERED_GRADUATED, tiers=tiers, rule_id="R_NEG")
+        res = calculate_line(line, [rule], [make_event(qty=10)])
+        assert res.finding_type == FindingType.INSUFFICIENT_DATA
+        assert "Negative tier rate" in res.explanation
+
+    def test_non_increasing_tier_bounds_returns_insufficient_data(self):
+        """Tiered rule with non-increasing bounds must return INSUFFICIENT_DATA without crashing."""
+        line = make_line()
+        tiers = [
+            TierBand(up_to=100, price_per_unit_cents=10),
+            TierBand(up_to=50, price_per_unit_cents=8),
+            TierBand(up_to=None, price_per_unit_cents=5),
+        ]
+        rule = make_rule(RuleType.TIERED_GRADUATED, tiers=tiers, rule_id="R_BOUNDS")
+        res = calculate_line(line, [rule], [make_event(qty=10)])
+        assert res.finding_type == FindingType.INSUFFICIENT_DATA
+        assert "strictly increasing" in res.explanation
+
+    def test_invalid_discount_pct_returns_insufficient_data(self):
+        """Discount rule with discount > 100% or < 0% must return INSUFFICIENT_DATA."""
+        line = make_line()
+        primary = make_rule(RuleType.PER_UNIT, rate_cents=10)
+        rule_over = make_rule(RuleType.DISCOUNT_PCT, discount_pct=Decimal("150"), rule_id="R_OVER")
+        res_over = calculate_line(line, [primary, rule_over], [make_event(qty=10)])
+        assert res_over.finding_type == FindingType.INSUFFICIENT_DATA
+        assert "Invalid discount percentage" in res_over.explanation
+
+        rule_neg = make_rule(RuleType.DISCOUNT_PCT, discount_pct=Decimal("-5"), rule_id="R_NEG_DISC")
+        res_neg = calculate_line(line, [primary, rule_neg], [make_event(qty=10)])
+        assert res_neg.finding_type == FindingType.INSUFFICIENT_DATA
+        assert "Invalid discount percentage" in res_neg.explanation
+
+    def test_nan_and_infinite_usage_quantities_quarantined(self):
+        """Usage events with NaN or Infinity quantities must be quarantined rather than crashing."""
+        line = make_line()
+        rule = make_rule(RuleType.PER_UNIT, rate_cents=10)
+        nan_event = UsageEvent(event_id="ev_nan", line_id="L1", quantity=Decimal("NaN"), environment="production")
+        inf_event = UsageEvent(event_id="ev_inf", line_id="L1", quantity=Decimal("Infinity"), environment="production")
+        valid_event = make_event(qty=50)
+
+        res = calculate_line(line, [rule], [nan_event, inf_event, valid_event])
+        assert len(res.quarantined_events) == 2
+        quarantined_ids = {q.event_id for q in res.quarantined_events}
+        assert "ev_nan" in quarantined_ids
+        assert "ev_inf" in quarantined_ids
+        assert res.recalculated_amount_cents == 500
+
+

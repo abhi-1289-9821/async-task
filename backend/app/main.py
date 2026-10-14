@@ -5,11 +5,13 @@ FastAPI application entrypoint for Billing Dispute Investigation and Resolution 
 Serves both REST API endpoints and built React frontend assets.
 """
 
+import math
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
@@ -42,6 +44,33 @@ app = FastAPI(
     version=settings.app_version,
     lifespan=lifespan,
 )
+
+
+def _sanitize_validation_errors(obj):
+    """Recursively replaces non-finite float values and exception objects so json.dumps doesn't crash."""
+    if isinstance(obj, float):
+        if math.isnan(obj):
+            return "NaN"
+        if math.isinf(obj):
+            return "Infinity" if obj > 0 else "-Infinity"
+        return obj
+    if isinstance(obj, (int, str, bool)) or obj is None:
+        return obj
+    if isinstance(obj, dict):
+        return {str(k): _sanitize_validation_errors(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_sanitize_validation_errors(item) for item in obj]
+    return str(obj)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    sanitized_errors = _sanitize_validation_errors(exc.errors())
+    return JSONResponse(
+        status_code=422,
+        content={"detail": sanitized_errors},
+    )
+
 
 app.add_middleware(StructuredLoggingMiddleware)
 

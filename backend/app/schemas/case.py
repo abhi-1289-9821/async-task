@@ -46,7 +46,7 @@ class ContractRuleCreate(BaseModel):
     rule_type: RuleTypeDB
     rate_cents: int = Field(0, ge=0)
     tiers: Optional[list[TierBandSchema]] = None
-    discount_pct: Optional[float] = Field(None, ge=0.0, le=100.0)
+    discount_pct: Optional[float] = Field(None, ge=0.0, le=100.0, allow_inf_nan=False)
     minimum_commit_cents: int = Field(0, ge=0)
     included_units: int = Field(0, ge=0)
     overage_rate_cents: Optional[int] = Field(None, ge=0)

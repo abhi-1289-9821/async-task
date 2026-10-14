@@ -75,13 +75,13 @@ def classify_error(e: Exception) -> tuple[str, bool]:
             pass
 
     err_str = str(e).lower()
-    if "401" in err_str or "unauthorized" in err_str or "403" in err_str or "forbidden" in err_str:
+    if re.search(r"\b(401|403)\b", err_str) or "unauthorized" in err_str or "forbidden" in err_str:
         return ("401_AUTH_ERROR", False)
-    if "404" in err_str or "not found" in err_str or "not_found" in err_str:
+    if re.search(r"\b404\b", err_str) or "not found" in err_str or "not_found" in err_str:
         return ("404_NOT_FOUND", False)
-    if "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str or "rate limit" in err_str:
+    if re.search(r"\b429\b", err_str) or "resource_exhausted" in err_str or "quota" in err_str or "rate limit" in err_str:
         return ("429_RATE_LIMIT", True)
-    if any(code in err_str for code in ("500", "502", "503", "504")) or "server error" in err_str:
+    if re.search(r"\b(500|502|503|504)\b", err_str) or "server error" in err_str:
         return ("500_SERVER_ERROR", True)
     if "timeout" in err_str or "timed out" in err_str:
         return ("TIMEOUT", True)

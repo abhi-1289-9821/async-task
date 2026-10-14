@@ -28,8 +28,14 @@ def sanitize_error_message(text: str) -> str:
     """Strips API keys, bearer tokens, and secrets from error text."""
     if not text:
         return ""
-    # Strip any configured keys
-    for key in (settings.gemini_api_key, settings.groq_api_key, settings.openrouter_api_key):
+    # Strip any configured keys and tokens
+    for key in (
+        settings.gemini_api_key,
+        settings.groq_api_key,
+        settings.openrouter_api_key,
+        settings.demo_reviewer_token,
+        settings.demo_viewer_token,
+    ):
         if key and len(key) > 5 and not key.startswith("your-") and not key.startswith("your_"):
             text = text.replace(key, "[REDACTED_API_KEY]")
     # Redact common key prefixes and formats

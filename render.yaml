@@ -14,11 +14,22 @@ services:
         value: real
       - key: GEMINI_MODEL
         value: gemini-2.0-flash
+      - key: LLM_PROVIDERS
+        value: gemini,groq,openrouter
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: OPENROUTER_MODEL
+        value: google/gemini-2.0-flash-001
       - key: DATABASE_URL
         sync: false
       - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
         sync: false
       - key: DEMO_REVIEWER_TOKEN
         sync: false
       - key: DEMO_VIEWER_TOKEN
         sync: false
+

@@ -42,8 +42,12 @@ def execute_case_calculation(
             detail=f"Case '{case_id}' has no invoice lines",
         )
 
-    # Load contract rules
-    db_rules = db.query(DBContractRule).filter(DBContractRule.case_id == case_id).all()
+    # Load contract rules (active only)
+    db_rules = (
+        db.query(DBContractRule)
+        .filter(DBContractRule.case_id == case_id, DBContractRule.is_active == True)
+        .all()
+    )
 
     # Load usage events
     db_events = db.query(DBUsageEvent).filter(DBUsageEvent.case_id == case_id).all()
@@ -97,18 +101,32 @@ def execute_case_calculation(
             line_id=e.line_id,
             quantity=Decimal(str(e.quantity)),
             environment=e.environment,
+            timestamp=e.event_timestamp,
             raw={},
         )
         for e in db_events
     ]
 
-
-
     # Run pure calculation engine
-    engine_result = engine.run_calculation(engine_lines, engine_rules, engine_events)
+    engine_result = engine.run_calculation(
+        engine_lines,
+        engine_rules,
+        engine_events,
+        period_start=case.period_start,
+        period_end=case.period_end,
+    )
 
     # Persist Calculation record
     calc_id = f"calc_{uuid.uuid4().hex[:12]}"
+    all_quarantined_data = [
+        {
+            "event_id": q.event_id,
+            "reason": q.reason,
+            "raw": q.raw,
+        }
+        for q in engine_result.quarantined_events
+    ] if engine_result.quarantined_events else None
+
     db_calc = Calculation(
         id=calc_id,
         case_id=case.id,
@@ -119,6 +137,7 @@ def execute_case_calculation(
         total_recalculated_cents=engine_result.total_recalculated_cents,
         total_difference_cents=engine_result.total_difference_cents,
         result_hash=engine_result.result_hash,
+        quarantined_events=all_quarantined_data,
     )
     db.add(db_calc)
 

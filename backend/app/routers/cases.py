@@ -44,6 +44,8 @@ def create_case(
         customer_name=payload.customer_name,
         disputed_amount_cents=payload.disputed_amount_cents,
         dispute_description=payload.dispute_description,
+        period_start=payload.period_start,
+        period_end=payload.period_end,
         status=CaseStatus.OPEN.value,
         evidence_version=1,
     )

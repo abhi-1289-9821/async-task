@@ -96,6 +96,54 @@ def validate_citations(
     return passed, sanitized, errors
 
 
+def derive_engine_finding_type(
+    line_results: list[dict[str, Any]],
+    calculation_status: str = "OK",
+) -> str:
+    """
+    Derives deterministic finding type from billing engine results with strict precedence:
+      1. any INSUFFICIENT_DATA -> INSUFFICIENT_EVIDENCE
+      2. else any AMBIGUOUS -> CONTRACT_AMBIGUITY
+      3. else any overcharge (difference_cents < 0) -> CONFIRMED_CALCULATION_DISCREPANCY
+      4. else NO_DISCREPANCY
+    """
+    # 1. Any INSUFFICIENT_DATA
+    if calculation_status == "INSUFFICIENT_DATA" or any(lr.get("finding_type") == "INSUFFICIENT_DATA" for lr in line_results):
+        return "INSUFFICIENT_EVIDENCE"
+
+    # 2. Else any AMBIGUOUS
+    if calculation_status == "AMBIGUOUS" or any(lr.get("finding_type") == "AMBIGUOUS" for lr in line_results):
+        return "CONTRACT_AMBIGUITY"
+
+    # 3. Else any overcharge (difference_cents < 0 means customer was billed more than recalculated)
+    if any(lr.get("difference_cents", 0) < 0 for lr in line_results):
+        return "CONFIRMED_CALCULATION_DISCREPANCY"
+
+    # 4. Else NO_DISCREPANCY
+    return "NO_DISCREPANCY"
+
+
+def generate_engine_narrative(
+    engine_finding_type: str,
+    line_results: list[dict[str, Any]],
+    calculation_status: str = "OK",
+) -> str:
+    """Generates deterministic, mathematically consistent narrative when AI narrative contradicts engine."""
+    if engine_finding_type == "INSUFFICIENT_EVIDENCE":
+        return "Deterministic billing engine calculation indicates insufficient telemetry or contract data to recalculate line items. Additional evidence or rule definitions are required to complete investigation."
+    elif engine_finding_type == "CONTRACT_AMBIGUITY":
+        ambig_lines = [lr.get("line_id") for lr in line_results if lr.get("finding_type") == "AMBIGUOUS"]
+        lines_desc = ", ".join(ambig_lines) if ambig_lines else "disputed line items"
+        return f"Deterministic billing engine identified competing contract interpretations for {lines_desc}. Recalculated amount cannot be finalized until a reviewer chooses an interpretation."
+    elif engine_finding_type == "CONFIRMED_CALCULATION_DISCREPANCY":
+        overcharged = [lr for lr in line_results if lr.get("difference_cents", 0) < 0]
+        total_overcharge = sum(abs(lr.get("difference_cents", 0)) for lr in overcharged)
+        lines_summary = ", ".join(f"{lr.get('line_id')} (billed {lr.get('original_amount_cents')}¢, recalculated {lr.get('recalculated_amount_cents')}¢)" for lr in overcharged)
+        return f"Deterministic billing engine confirmed an overcharge totaling {total_overcharge}¢ across line item(s): {lines_summary}. Discrepancy is eligible for credit approval."
+    else:
+        return "Deterministic billing engine verified all line items against contractual pricing rules and telemetry events. All billed amounts match recalculated figures; no discrepancy found."
+
+
 def validate_consistency(
     finding: dict[str, Any],
     calculation_status: str,
@@ -103,46 +151,24 @@ def validate_consistency(
     line_results: list[dict[str, Any]],
 ) -> tuple[bool, str, list[str]]:
     """
-    Verifies that the finding type is mathematically consistent with the deterministic engine.
-    If contradiction exists, overrides with engine-derived truth.
+    Verifies that the model's finding type matches the deterministic engine-derived type.
+    If the model contradicts the engine:
+      - consistency_check_passed is set to False
+      - final finding type is overridden to the engine-derived type
+      - validation notes record the exact contradiction
+    Returns (consistency_check_passed, final_finding_type, validation_notes).
     """
-    finding_type = finding.get("finding_type", "UNRESOLVED")
-    errors = []
+    model_type = finding.get("finding_type", "UNRESOLVED")
+    engine_type = derive_engine_finding_type(line_results, calculation_status)
+    notes = []
 
-    has_overcharge = any(lr.get("difference_cents", 0) < 0 for lr in line_results)
-    has_ambiguity = (calculation_status == "AMBIGUOUS") or any(lr.get("finding_type") == "AMBIGUOUS" for lr in line_results)
-    has_insufficient = (calculation_status == "INSUFFICIENT_DATA") or any(lr.get("finding_type") == "INSUFFICIENT_DATA" for lr in line_results)
-
-    # 1. Contradiction: AI claims discrepancy, but engine has 0 difference and OK status
-    if finding_type == "CONFIRMED_CALCULATION_DISCREPANCY":
-        if not has_overcharge and total_difference_cents == 0:
-            errors.append(
-                "Contradiction: AI claimed CONFIRMED_CALCULATION_DISCREPANCY but deterministic engine found 0 difference"
-            )
-            return False, "UNRESOLVED", errors
-
-    # 2. Contradiction: Engine found ambiguity, but AI claimed NO_DISCREPANCY
-    if has_ambiguity and finding_type == "NO_DISCREPANCY":
-        errors.append(
-            "Contradiction: Engine reported AMBIGUOUS clauses, but AI claimed NO_DISCREPANCY; derived CONTRACT_AMBIGUITY"
+    if model_type != engine_type:
+        notes.append(
+            f"AI finding type '{model_type}' contradicted deterministic engine result '{engine_type}'; overridden to '{engine_type}'"
         )
-        return False, "CONTRACT_AMBIGUITY", errors
+        return False, engine_type, notes
 
-    # 3. Contradiction: Engine found missing data, but AI claimed NO_DISCREPANCY
-    if has_insufficient and finding_type == "NO_DISCREPANCY":
-        errors.append(
-            "Contradiction: Engine reported INSUFFICIENT_DATA, but AI claimed NO_DISCREPANCY; derived INSUFFICIENT_EVIDENCE"
-        )
-        return False, "INSUFFICIENT_EVIDENCE", errors
-
-    # 4. Contradiction: Engine found overcharge, but AI claimed NO_DISCREPANCY
-    if (has_overcharge or total_difference_cents < 0) and finding_type == "NO_DISCREPANCY":
-        errors.append(
-            "Contradiction: Deterministic engine confirmed an overcharge, but AI claimed NO_DISCREPANCY; derived CONFIRMED_CALCULATION_DISCREPANCY from engine math"
-        )
-        return True, "CONFIRMED_CALCULATION_DISCREPANCY", errors
-
-    return True, finding_type, []
+    return True, engine_type, []
 
 
 def sanitize_resolution_options(

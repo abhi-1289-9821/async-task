@@ -33,73 +33,25 @@ setup_structured_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+
     # Setup tables and append-only triggers on startup for dev/test
     create_all_tables()
+
     # Auto-seed initial demo dispute cases if database is brand new / empty
     try:
         from app.database import SessionLocal
-        from app.models.case import Case, CaseStatus
-        from app.models.invoice import InvoiceLine, ContractRule
-        from app.models.evidence import EvidenceEvent
-        from datetime import datetime, timezone
-        
+        from app.seed import seed_demo_cases_if_empty
+
         db = SessionLocal()
         try:
-            if db.query(Case).count() == 0:
-                # 1. Acme Corp (Metered Tier Overcharge)
-                c1 = Case(
-                    id="case-acme-101",
-                    title="Metered API Tier Overcharge",
-                    customer_name="Acme Corp",
-                    disputed_amount_cents=2500,
-                    dispute_description="Customer reports overcharge of $25.00 on production API calls. Telemetry logs show 250 production calls and 150 staging calls; staging calls were improperly counted towards billable tier.",
-                    status=CaseStatus.OPEN.value,
-                    evidence_version=1,
-                )
-                db.add(c1)
-                db.flush()
-                db.add(InvoiceLine(id="line-api-calls", case_id=c1.id, description="Production API Metered Requests", original_amount_cents=5000))
-                db.add(ContractRule(id="rule-api-rate", line_id="line-api-calls", rule_type="PER_UNIT", rate_cents=10, exempt_environments=["staging", "test"]))
-                db.add(EvidenceEvent(case_id=c1.id, event_id="ev-acme-prod-1", line_id="line-api-calls", timestamp=datetime.now(timezone.utc), quantity=250.0, environment="production"))
-                db.add(EvidenceEvent(case_id=c1.id, event_id="ev-acme-stg-1", line_id="line-api-calls", timestamp=datetime.now(timezone.utc), quantity=150.0, environment="staging"))
-
-                # 2. Bravo Ltd (Contract Ambiguity)
-                c2 = Case(
-                    id="case-bravo-102",
-                    title="Underspecified Tiered Pricing Clause",
-                    customer_name="Bravo Ltd",
-                    disputed_amount_cents=1500,
-                    dispute_description="Dispute regarding tier calculation method on 200 compute units. Contract rule card contains competing graduated and volume interpretations.",
-                    status=CaseStatus.OPEN.value,
-                    evidence_version=1,
-                )
-                db.add(c2)
-                db.flush()
-                db.add(InvoiceLine(id="line-compute-units", case_id=c2.id, description="Compute Units Band A", original_amount_cents=4000))
-                db.add(ContractRule(id="rule-tiered-grad", line_id="line-compute-units", rule_type="TIERED_GRADUATED", rate_cents=0, tiers=[{"up_to": 100, "price_per_unit_cents": 15}, {"up_to": None, "price_per_unit_cents": 10}]))
-                db.add(ContractRule(id="rule-tiered-vol", line_id="line-compute-units", rule_type="TIERED_VOLUME", rate_cents=0, tiers=[{"up_to": 100, "price_per_unit_cents": 15}, {"up_to": None, "price_per_unit_cents": 10}]))
-                db.add(EvidenceEvent(case_id=c2.id, event_id="ev-bravo-1", line_id="line-compute-units", timestamp=datetime.now(timezone.utc), quantity=200.0, environment="production"))
-
-                # 3. Delta Cloud (Clean Invoice)
-                c3 = Case(
-                    id="case-delta-103",
-                    title="Clean Fixed Platform Subscription",
-                    customer_name="Delta Cloud",
-                    disputed_amount_cents=0,
-                    dispute_description="Customer inquiry regarding $100.00 base platform subscription fee. Recalculation confirms billed amount is exact per flat contract rule.",
-                    status=CaseStatus.OPEN.value,
-                    evidence_version=1,
-                )
-                db.add(c3)
-                db.flush()
-                db.add(InvoiceLine(id="line-platform-sub", case_id=c3.id, description="Monthly Platform Fee", original_amount_cents=10000))
-                db.add(ContractRule(id="rule-sub-flat", line_id="line-platform-sub", rule_type="FLAT", rate_cents=10000))
-
-                db.commit()
+            seed_demo_cases_if_empty(db)
         finally:
             db.close()
     except Exception:
-        pass
+        _log.exception("seed: startup seeding failed (non-fatal) — app will continue without demo data")
+
     yield
 
 

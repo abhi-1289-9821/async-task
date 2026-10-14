@@ -65,37 +65,48 @@ def _clean_json_markdown(text: str) -> str:
     return text.strip()
 
 
-def _mock_analysis(prompt: str, state: dict[str, Any]) -> dict[str, Any]:
-    """Generates deterministic mock finding analysis from state."""
+def _mock_analysis(prompt: str, state: dict[str, Any], target_lr: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Generates deterministic mock finding analysis from state, anchored to target_lr when specified."""
     line_results = state.get("line_results", [])
     calc_status = state.get("calculation_status", "OK")
 
-    # Check for discrepancy, ambiguity, or missing data
-    ambiguous_lrs = [lr for lr in line_results if lr.get("finding_type") == "AMBIGUOUS"]
-    insufficient_lrs = [lr for lr in line_results if lr.get("finding_type") == "INSUFFICIENT_DATA"]
-    overcharged = [lr for lr in line_results if lr.get("difference_cents", 0) < 0]
+    if target_lr is None:
+        ambiguous_lrs = [lr for lr in line_results if lr.get("finding_type") == "AMBIGUOUS"]
+        insufficient_lrs = [lr for lr in line_results if lr.get("finding_type") == "INSUFFICIENT_DATA"]
+        overcharged = [lr for lr in line_results if lr.get("difference_cents", 0) < 0]
 
-    primary_lr = (
-        ambiguous_lrs[0] if ambiguous_lrs else (
-            insufficient_lrs[0] if insufficient_lrs else (
-                overcharged[0] if overcharged else (line_results[0] if line_results else {})
+        primary_lr = (
+            ambiguous_lrs[0] if ambiguous_lrs else (
+                insufficient_lrs[0] if insufficient_lrs else (
+                    overcharged[0] if overcharged else (line_results[0] if line_results else {})
+                )
             )
         )
-    )
+    else:
+        primary_lr = target_lr
+
     citation_id = primary_lr.get("result_id", "res_unknown")
     lr_db_id = primary_lr.get("id")
+    target_line_id = primary_lr.get("line_id", "unknown")
+    matching_rules = [r.get("id") for r in state.get("contract_rules", []) if r.get("line_id") == target_line_id]
 
-    if calc_status == "AMBIGUOUS":
-        target_amb = ambiguous_lrs[0] if ambiguous_lrs else primary_lr
-        c_ids = [lr.get("result_id") for lr in ambiguous_lrs if lr.get("result_id")] or [citation_id]
+    c_ids = [citation_id]
+    if target_line_id and target_line_id != "unknown":
+        c_ids.append(target_line_id)
+    if matching_rules:
+        c_ids.extend(matching_rules)
+
+    lr_finding = primary_lr.get("finding_type")
+
+    if lr_finding == "AMBIGUOUS" or (target_lr is None and calc_status == "AMBIGUOUS"):
         return {
             "finding_type": "CONTRACT_AMBIGUITY",
             "summary_narrative": (
-                f"The contract terms on line '{target_amb.get('line_id')}' allow multiple valid pricing interpretations. "
+                f"The contract terms on line '{target_line_id}' allow multiple valid pricing interpretations. "
                 "The deterministic engine identified competing interpretations (graduated vs volume tiers)."
             ),
             "verified_facts": [
-                f"Line item '{target_amb.get('line_id')}' was billed {target_amb.get('original_amount_cents')}¢.",
+                f"Line item '{target_line_id}' was billed {primary_lr.get('original_amount_cents')}¢.",
                 "Contract rule contains ambiguous tier boundaries.",
             ],
             "possible_explanations": [
@@ -111,17 +122,15 @@ def _mock_analysis(prompt: str, state: dict[str, Any]) -> dict[str, Any]:
                 "Order form amendment detailing tier calculation method.",
             ],
             "citation_ids": c_ids,
-            "calculation_line_result_id": target_amb.get("id"),
+            "calculation_line_result_id": lr_db_id,
         }
 
-    if calc_status == "INSUFFICIENT_DATA":
-        target_ins = insufficient_lrs[0] if insufficient_lrs else primary_lr
-        c_ids = [lr.get("result_id") for lr in insufficient_lrs if lr.get("result_id")] or [citation_id]
+    if lr_finding == "INSUFFICIENT_DATA" or (target_lr is None and calc_status == "INSUFFICIENT_DATA"):
         return {
             "finding_type": "INSUFFICIENT_EVIDENCE",
             "summary_narrative": (
-                f"Insufficient evidence available to complete recalculation on line '{target_ins.get('line_id')}'. "
-                f"Engine reported: {state.get('calculation_status_reason', 'Missing usage data or contract rules')}."
+                f"Insufficient evidence available to complete recalculation on line '{target_line_id}'. "
+                f"Engine reported: {primary_lr.get('explanation') or state.get('calculation_status_reason', 'Missing usage data or contract rules')}."
             ),
             "verified_facts": [
                 "Dispute was filed by customer.",
@@ -137,31 +146,22 @@ def _mock_analysis(prompt: str, state: dict[str, Any]) -> dict[str, Any]:
                 "Complete usage event logs for the disputed period.",
             ],
             "citation_ids": c_ids,
-            "calculation_line_result_id": target_ins.get("id"),
+            "calculation_line_result_id": lr_db_id,
         }
 
-    # Check for overcharge in line results
-    if overcharged:
-        target = overcharged[0]
-        diff_cents = target.get("difference_cents", 0)
-        orig_cents = target.get("original_amount_cents", 0)
-        recalc_cents = target.get("recalculated_amount_cents", 0)
-        target_line_id = target.get("line_id")
-        matching_rules = [r.get("id") for r in state.get("contract_rules", []) if r.get("line_id") == target_line_id]
-        c_ids = [target.get("result_id")]
-        if target_line_id:
-            c_ids.append(target_line_id)
-        if matching_rules:
-            c_ids.extend(matching_rules)
+    diff_cents = primary_lr.get("difference_cents", 0)
+    if diff_cents < 0:
+        orig_cents = primary_lr.get("original_amount_cents", 0)
+        recalc_cents = primary_lr.get("recalculated_amount_cents", 0)
         return {
             "finding_type": "CONFIRMED_CALCULATION_DISCREPANCY",
             "summary_narrative": (
-                f"Deterministic billing recalculation confirms customer was overcharged on line '{target.get('line_id')}'. "
+                f"Deterministic billing recalculation confirms customer was overcharged on line '{target_line_id}'. "
                 f"Original billed: {orig_cents}¢; recalculated per contract rule: {recalc_cents}¢; "
                 f"discrepancy: {diff_cents}¢."
             ),
             "verified_facts": [
-                f"Customer was billed {orig_cents}¢ for line '{target.get('line_id')}'.",
+                f"Customer was billed {orig_cents}¢ for line '{target_line_id}'.",
                 f"Deterministic engine recalculation yields {recalc_cents}¢.",
                 f"Overcharge discrepancy confirmed as {abs(diff_cents)}¢.",
             ],
@@ -175,18 +175,18 @@ def _mock_analysis(prompt: str, state: dict[str, Any]) -> dict[str, Any]:
             "open_questions": [],
             "missing_evidence_questions": [],
             "citation_ids": c_ids,
-            "calculation_line_result_id": target.get("id"),
+            "calculation_line_result_id": lr_db_id,
         }
 
     # No discrepancy
     return {
         "finding_type": "NO_DISCREPANCY",
         "summary_narrative": (
-            "Deterministic engine recalculation matches the original billed amounts exactly. "
+            f"Deterministic engine recalculation for line '{target_line_id}' matches the original billed amounts exactly. "
             "No calculation error or rule violation was detected."
         ),
         "verified_facts": [
-            "All invoice lines recalculate identically to the billed amounts.",
+            f"Line '{target_line_id}' recalculates identically to the billed amounts.",
         ],
         "possible_explanations": [
             "Customer may have misunderstood contract tier boundaries or minimum commit terms.",
@@ -196,7 +196,7 @@ def _mock_analysis(prompt: str, state: dict[str, Any]) -> dict[str, Any]:
         ],
         "open_questions": [],
         "missing_evidence_questions": [],
-        "citation_ids": [citation_id] if citation_id != "res_unknown" else [],
+        "citation_ids": c_ids if citation_id != "res_unknown" else [],
         "calculation_line_result_id": lr_db_id,
     }
 
@@ -417,8 +417,11 @@ def call_llm(
     raise AllProvidersFailedError(f"All LLM providers failed: {err_details}", attempts=attempts)
 
 
-def generate_investigation_findings(state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Analyzes evidence and deterministic calculation to produce findings."""
+def generate_investigation_findings(
+    state: dict[str, Any],
+    target_lr: Optional[dict[str, Any]] = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Analyzes evidence and deterministic calculation to produce findings for a target line or overall."""
     prompt = build_analysis_prompt(
         case_title=state.get("case_data", {}).get("title", ""),
         customer_name=state.get("case_data", {}).get("customer_name", ""),
@@ -437,9 +440,15 @@ def generate_investigation_findings(state: dict[str, Any]) -> tuple[dict[str, An
         adjustments=state.get("adjustments", []),
         quarantined_events=state.get("quarantined_events", []),
     )
+    if target_lr:
+        prompt += (
+            f"\nTARGET INVOICE LINE FOR THIS FINDING:\n"
+            f"Focus your finding specifically on line '{target_lr.get('line_id')}' (DB ID: {target_lr.get('id')}, Result ID: {target_lr.get('result_id')}). "
+            f"Set calculation_line_result_id to {target_lr.get('id')}.\n"
+        )
 
     if settings.llm_mode == "mock":
-        data = _mock_analysis(prompt, state)
+        data = _mock_analysis(prompt, state, target_lr=target_lr)
         data["generation_path"] = "mock"
         tokens = {
             "prompt_tokens": 120,

@@ -41,6 +41,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
 from typing import Any
@@ -137,6 +138,7 @@ class UsageEvent:
     line_id: str
     quantity: Decimal
     environment: str
+    timestamp: datetime | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -875,6 +877,8 @@ def run_calculation(
     lines: list[InvoiceLine],
     rules: list[ContractRule],
     events: list[UsageEvent],
+    period_start: datetime | None = None,
+    period_end: datetime | None = None,
 ) -> EngineResult:
     """
     Run the billing engine over all invoice lines.
@@ -924,6 +928,17 @@ def run_calculation(
                 raw=ev.raw,
             ))
             continue
+
+        if ev.timestamp is not None:
+            if (period_start is not None and ev.timestamp < period_start) or (
+                period_end is not None and ev.timestamp > period_end
+            ):
+                all_quarantined.append(QuarantinedEvent(
+                    event_id=ev.event_id,
+                    reason="Outside billing period",
+                    raw=ev.raw,
+                ))
+                continue
 
         cleaned_events.append(ev)
 

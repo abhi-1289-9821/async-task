@@ -79,6 +79,8 @@ class Case(Base):
         default=CaseStatus.OPEN.value,
     )
     evidence_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    period_start: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    period_end: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False

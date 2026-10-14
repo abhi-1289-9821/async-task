@@ -22,6 +22,8 @@ services:
         value: llama-3.3-70b-versatile
       - key: OPENROUTER_MODEL
         value: google/gemini-2.5-flash
+      - key: INVESTIGATION_RUN_TTL_SECONDS
+        value: "180"
       - key: DATABASE_URL
         sync: false
       - key: GEMINI_API_KEY
@@ -34,4 +36,5 @@ services:
         sync: false
       - key: DEMO_VIEWER_TOKEN
         sync: false
-
+      - key: REVIEWER_TOKENS
+        sync: false

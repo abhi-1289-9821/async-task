@@ -8,16 +8,12 @@ import {
   FileText, 
   Calculator, 
   History, 
-  AlertTriangle, 
   Check, 
   Edit3, 
   XCircle, 
   Lock, 
-  Hash, 
-  Calendar,
-  AlertCircle,
-  ExternalLink,
-  Layers
+  Hash,
+  AlertTriangle
 } from 'lucide-react';
 import { 
   getCase, 
@@ -30,9 +26,11 @@ import {
   reviewFinding, 
   approveCredit, 
   getCaseCredits,
+  getCreditCap,
   transitionCase,
   getActiveRole
 } from '../api/client';
+import { formatCents } from '../utils/money';
 import EvidenceModal from './EvidenceModal';
 
 export default function CaseDetail({ caseId, onBack, onToast }) {
@@ -44,6 +42,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
   const [credits, setCredits] = useState([]);
   const [activeTab, setActiveTab] = useState('engine');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [evidenceModalOpen, setEvidenceModalOpen] = useState(false);
   
@@ -60,6 +59,8 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
   const [selectedResolutionOptionId, setSelectedResolutionOptionId] = useState(null);
   const [creditReason, setCreditReason] = useState('RATE_CALCULATION_ERROR');
   const [creditNote, setCreditNote] = useState('Approved per confirmed calculation discrepancy');
+  // Cap breakdown from API (Task 3)
+  const [capInfo, setCapInfo] = useState(null);
 
   // Dynamic Role State (reactive to Navbar role switch)
   const [currentRole, setCurrentRole] = useState(getActiveRole());
@@ -75,9 +76,13 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
     return () => window.removeEventListener('roleChanged', handleRoleChanged);
   }, []);
 
-  const loadAllCaseData = async () => {
+  const loadAllCaseData = async (isInitial = false) => {
     try {
-      setLoading(true);
+      if (isInitial || !caseData) {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
+      }
       const [cData, cEvents, cFindings, cCredits, cInvs, cCalcs] = await Promise.all([
         getCase(caseId),
         getCaseEvents(caseId).catch(() => []),
@@ -110,6 +115,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
       onToast('error', err.message || 'Failed to load case data');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -118,6 +124,17 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
       loadAllCaseData();
     }
   }, [caseId]);
+
+  // Fetch credit cap from backend when selected line changes or after a credit approval
+  useEffect(() => {
+    if (caseId && selectedLineId) {
+      getCreditCap(caseId, selectedLineId)
+        .then(setCapInfo)
+        .catch(() => setCapInfo(null));
+    } else {
+      setCapInfo(null);
+    }
+  }, [caseId, selectedLineId, credits.length]);
 
   // Transition status handler
   const handleTransition = async (targetStatus) => {
@@ -219,17 +236,21 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
         payload.requested_amount_cents = Math.round(parseFloat(creditAmountDollars) * 100);
       }
       const res = await approveCredit(payload);
-      onToast('success', `Credit approved for $${(res.amount_cents / 100).toFixed(2)} under lock`);
+      onToast('success', `Credit approved for ${formatCents(res.amount_cents)} under lock`);
       await loadAllCaseData();
       setActiveTab('credits');
     } catch (err) {
-      onToast('error', err.message || 'Credit approval failed');
+      if (err.status === 409 || (err.message && err.message.toLowerCase().includes('already approved'))) {
+        onToast('error', 'Credit already approved for this finding');
+      } else {
+        onToast('error', err.message || 'Credit approval failed');
+      }
     } finally {
       setActionLoading(false);
     }
   };
 
-  if (loading || !caseData) {
+  if (loading && !caseData) {
     return (
       <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>
         <div style={{ fontSize: '1.25rem', marginBottom: '0.5rem' }}>Loading dispute case details...</div>
@@ -238,14 +259,12 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
     );
   }
 
-  const primaryFinding = findings[0] || null;
-  // Rigorously enforce that the LATEST human review decision must be ACCEPT
-  const latestReview = primaryFinding?.reviews && primaryFinding.reviews.length > 0 ? primaryFinding.reviews[0] : null;
-  const isAcceptedFinding = latestReview?.action === 'ACCEPT';
+
+
 
   return (
     <div>
-      {/* ── Breadcrumb & Navigation Bar ───────────────────────────────── */}
+      {/* â”€â”€ Breadcrumb & Navigation Bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
         <button type="button" className="btn btn-secondary btn-sm" onClick={onBack}>
           <ArrowLeft size={14} />
@@ -306,7 +325,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
         </div>
       </div>
 
-      {/* ── Case Header Banner ─────────────────────────────────────────── */}
+      {/* â”€â”€ Case Header Banner â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="glass-panel" style={{ padding: '1.75rem', marginBottom: '1.75rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
           <div>
@@ -336,13 +355,59 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Disputed Exposure</div>
             <div className="font-mono" style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--accent-cyan)' }}>
-              ${(caseData.disputed_amount_cents / 100).toFixed(2)}
+              {formatCents(caseData.disputed_amount_cents)}
             </div>
+            {refreshing && (
+              <div style={{ fontSize: '0.72rem', color: 'var(--accent-cyan)', marginTop: '4px' }}>
+                Syncing updates...
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* ── Tab Navigation ─────────────────────────────────────────────── */}
+      {/* Failed Investigation Warning Banner (Task 9h) */}
+      {investigation?.status === 'FAILED' && (
+        <div 
+          style={{ 
+            background: 'rgba(239, 68, 68, 0.12)', 
+            border: '1px solid rgba(239, 68, 68, 0.4)', 
+            borderRadius: 'var(--radius-md)', 
+            padding: '1rem 1.25rem', 
+            marginBottom: '1.5rem', 
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center', 
+            flexWrap: 'wrap', 
+            gap: '1rem' 
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <AlertTriangle size={20} color="var(--accent-rose)" />
+            <div>
+              <div style={{ fontWeight: 600, color: 'var(--accent-rose)', fontSize: '0.92rem' }}>
+                AI analysis unavailable - deterministic results below. Retry
+              </div>
+              {investigation.status_reason && (
+                <div style={{ fontSize: '0.75rem', color: '#cbd5e1', marginTop: '2px' }}>
+                  Reason: {investigation.status_reason}
+                </div>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={handleTriggerInvestigation}
+            disabled={actionLoading}
+            style={{ borderColor: 'var(--accent-rose)', color: '#fca5a5' }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* ── Tab Navigation ──────────────────────────────────────────────── */}
       <div className="tabs-nav">
         <button
           type="button"
@@ -390,7 +455,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
         </button>
       </div>
 
-      {/* ── TAB 1: Deterministic Engine ────────────────────────────────── */}
+      {/* â”€â”€ TAB 1: Deterministic Engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {activeTab === 'engine' && (
         <div>
           <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
@@ -424,19 +489,19 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                   <div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Billed Total</div>
                     <div className="font-mono" style={{ fontWeight: 700 }}>
-                      ${(calculation.total_original_billed_cents / 100).toFixed(2)}
+                      {formatCents(calculation.total_original_billed_cents)}
                     </div>
                   </div>
                   <div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Recalculated Total</div>
                     <div className="font-mono" style={{ fontWeight: 700 }}>
-                      ${(calculation.total_recalculated_cents / 100).toFixed(2)}
+                      {formatCents(calculation.total_recalculated_cents)}
                     </div>
                   </div>
                   <div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Total Discrepancy</div>
                     <div className="font-mono" style={{ fontWeight: 800, color: calculation.total_difference_cents < 0 ? 'var(--accent-rose)' : 'var(--accent-emerald)' }}>
-                      ${(Math.abs(calculation.total_difference_cents) / 100).toFixed(2)} {calculation.total_difference_cents < 0 ? '(Overcharge)' : ''}
+                      {formatDifference(calculation.total_difference_cents)}
                     </div>
                   </div>
                 </div>
@@ -485,14 +550,18 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                                   </div>
                                 </td>
                                 <td className="font-mono" style={{ fontWeight: 600 }}>
-                                  ${(lr.original_amount_cents / 100).toFixed(2)}
+                                  {formatCents(lr.original_amount_cents)}
                                 </td>
                                 <td className="font-mono" style={{ fontWeight: 700, color: '#38bdf8' }}>
-                                  ${(lr.recalculated_amount_cents / 100).toFixed(2)}
+                                  {formatCents(lr.recalculated_amount_cents)}
+                                  {(lr.finding_type === 'CONTRACT_AMBIGUITY' || (lr.interpretations && lr.interpretations.length > 0)) && (
+                                    <div style={{ fontSize: '0.68rem', color: '#fbbf24', fontWeight: 600, marginTop: '2px' }}>
+                                      *Not final — human review required
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="font-mono" style={{ fontWeight: 800, color: isOvercharge ? 'var(--accent-rose)' : isUndercharge ? 'var(--accent-amber)' : 'var(--accent-emerald)' }}>
-                                  {isOvercharge ? `-$${(Math.abs(lr.difference_cents) / 100).toFixed(2)}` : isUndercharge ? `+$${(lr.difference_cents / 100).toFixed(2)}` : '$0.00'}
-                                  {isOvercharge ? ' (Overcharge)' : ''}
+                                  {formatDifference(lr.difference_cents)}
                                 </td>
                                 <td>
                                   <span className={`badge ${lr.finding_type === 'CONFIRMED_CALCULATION_DISCREPANCY' ? 'badge-stale' : lr.finding_type === 'CONTRACT_AMBIGUITY' ? 'badge-awaiting' : lr.finding_type === 'INSUFFICIENT_DATA' ? 'badge-stale' : 'badge-resolved'}`}>
@@ -511,14 +580,30 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                                   <div>{lr.explanation}</div>
                                   {lr.interpretations && lr.interpretations.length > 0 && (
                                     <div style={{ marginTop: '0.45rem', padding: '0.45rem', background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)', borderRadius: '4px' }}>
-                                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#fbbf24', marginBottom: '2px' }}>
-                                        Competing Interpretations:
+                                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#fbbf24', marginBottom: '4px' }}>
+                                        ⚠ Competing Interpretations — Human Review Required:
                                       </div>
-                                      {lr.interpretations.map((interp, idx) => (
-                                        <div key={idx} style={{ fontSize: '0.72rem', color: '#fef3c7' }}>
-                                          • <strong>{interp.type || interp.method || 'Rule'}:</strong> ${(interp.calculated_amount_cents / 100).toFixed(2)} (diff: -${(Math.abs(interp.difference_cents) / 100).toFixed(2)})
-                                        </div>
-                                      ))}
+                                      {lr.interpretations.map((interp, idx) => {
+                                        const diff = (interp.recalculated_amount_cents != null && lr.original_amount_cents != null)
+                                          ? (interp.recalculated_amount_cents - lr.original_amount_cents)
+                                          : null;
+                                        return (
+                                          <div key={idx} style={{ fontSize: '0.72rem', color: '#fef3c7', marginBottom: '4px' }}>
+                                            <strong>{interp.interpretation_id || `Interp ${idx+1}`}:</strong>{' '}
+                                            <span style={{ fontWeight: 600 }}>{formatCents(interp.recalculated_amount_cents)}</span>
+                                            {diff != null && (
+                                              <span style={{ marginLeft: '4px', color: diff < 0 ? '#f87171' : diff > 0 ? '#fbbf24' : '#86efac' }}>
+                                                ({formatDifference(diff)})
+                                              </span>
+                                            )}
+                                            {interp.assumptions && interp.assumptions.length > 0 && (
+                                              <div style={{ marginTop: '2px', paddingLeft: '0.75rem', color: '#94a3b8', fontSize: '0.68rem' }}>
+                                                {interp.assumptions.map((a, ai) => <div key={ai}>• {a}</div>)}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
                                     </div>
                                   )}
                                 </td>
@@ -540,7 +625,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
         </div>
       )}
 
-      {/* ── TAB 2: AI Investigation (LangGraph) ───────────────────────── */}
+      {/* â”€â”€ TAB 2: AI Investigation (LangGraph) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {activeTab === 'investigation' && (
         <div>
           <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
@@ -601,8 +686,27 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
 
             {findings.length > 0 ? (
               <>
-                {findings.map((f) => (
-                  <div key={f.id} className="glass-card" style={{ marginBottom: '1.25rem', borderColor: f.is_stale ? 'var(--accent-rose)' : 'var(--border-subtle)' }}>
+                {(() => {
+                  const groups = {};
+                  findings.forEach((f) => {
+                    const matchingLr = calculation?.line_results?.find(lr => lr.id === f.calculation_line_result_id);
+                    const lineKey = matchingLr?.line_id || (f.calculation_line_result_id ? `Result #${f.calculation_line_result_id}` : 'General / Case-Wide');
+                    if (!groups[lineKey]) groups[lineKey] = [];
+                    groups[lineKey].push(f);
+                  });
+
+                  return Object.entries(groups).map(([lineKey, groupFindings]) => (
+                    <div key={lineKey} style={{ marginBottom: '2rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.85rem', paddingBottom: '0.35rem', borderBottom: '1px solid var(--border-subtle)' }}>
+                        <span style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--accent-cyan)' }}>
+                          Line Item: {lineKey}
+                        </span>
+                        <span className="badge badge-resolved" style={{ fontSize: '0.7rem' }}>
+                          {groupFindings.length} {groupFindings.length === 1 ? 'Finding' : 'Findings'}
+                        </span>
+                      </div>
+                      {groupFindings.map((f) => (
+                        <div key={f.id} className="glass-card" style={{ marginBottom: '1.25rem', borderColor: f.is_stale ? 'var(--accent-rose)' : 'var(--border-subtle)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <span className="badge badge-open">
@@ -646,9 +750,38 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                         Synthesized AI Finding & Narrative
                       </div>
                       <p style={{ fontSize: '0.92rem', lineHeight: 1.6, color: '#e2e8f0', margin: 0 }}>
-                        {f.raw_ai_text}
+                        {f.narrative || f.raw_ai_text}
                       </p>
+                      {f.narrative && f.raw_ai_text && f.narrative !== f.raw_ai_text && (
+                        <div style={{ marginTop: '0.5rem', fontSize: '0.78rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                          Original model text: &ldquo;{f.raw_ai_text}&rdquo;
+                        </div>
+                      )}
                     </div>
+
+                    {/* Why this was downgraded / Validation Notes Box */}
+                    {f.validation_notes && f.validation_notes.length > 0 && (
+                      <div
+                        style={{
+                          padding: '0.75rem 1rem',
+                          background: 'rgba(234, 179, 8, 0.1)',
+                          border: '1px solid rgba(234, 179, 8, 0.3)',
+                          borderRadius: 'var(--radius-sm)',
+                          marginBottom: '0.85rem',
+                          fontSize: '0.82rem',
+                        }}
+                      >
+                        <div style={{ fontWeight: 700, color: '#fbbf24', marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          <AlertTriangle size={14} />
+                          <span>Why this was downgraded / Validation Notes</span>
+                        </div>
+                        <ul style={{ paddingLeft: '1.25rem', color: '#fef08a', margin: 0 }}>
+                          {f.validation_notes.map((note, idx) => (
+                            <li key={idx}>{note}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
 
                     {/* Verified Facts */}
                     {f.verified_facts && f.verified_facts.length > 0 && (
@@ -724,7 +857,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                         );
                       })}
                       <span style={{ fontSize: '0.72rem', color: f.citation_validation_passed ? 'var(--accent-emerald)' : 'var(--accent-rose)', fontWeight: 600 }}>
-                        {f.citation_validation_passed ? '✓ Citations Verified' : '✗ Verification Failed'}
+                        {f.citation_validation_passed ? 'âœ“ Citations Verified' : 'âœ— Verification Failed'}
                       </span>
                     </div>
 
@@ -766,6 +899,9 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                     )}
                   </div>
                 ))}
+              </div>
+            ));
+          })()}
 
                 {/* Resolution Options Proposed by Agent */}
                 {investigation?.resolution_options && investigation.resolution_options.length > 0 && (
@@ -829,7 +965,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
         </div>
       )}
 
-      {/* ── TAB 3: Invoice Lines & Rules ──────────────────────────────── */}
+      {/* â”€â”€ TAB 3: Invoice Lines & Rules â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {activeTab === 'lines' && (
         <div className="glass-panel" style={{ padding: '1.5rem' }}>
           <h3 style={{ fontSize: '1.2rem', marginBottom: '1rem' }}>Disputed Invoice Line Items</h3>
@@ -847,7 +983,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                   <tr key={l.id}>
                     <td className="font-mono">{l.id}</td>
                     <td>{l.description}</td>
-                    <td className="font-mono">${(l.original_amount_cents / 100).toFixed(2)}</td>
+                    <td className="font-mono">{formatCents(l.original_amount_cents)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -864,30 +1000,50 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                   <th>Rule Type</th>
                   <th>Rate (cents)</th>
                   <th>Commitment</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 {caseData.contract_rules.map((r) => (
-                  <tr key={r.id}>
+                  <tr key={r.id} style={{ opacity: r.is_active === false ? 0.6 : 1 }}>
                     <td className="font-mono">{r.id}</td>
                     <td className="font-mono">{r.line_id}</td>
                     <td><span className="badge badge-open">{r.rule_type}</span></td>
                     <td className="font-mono">{r.rate_cents}¢</td>
-                    <td className="font-mono">{r.minimum_commit_cents ? `$${(r.minimum_commit_cents / 100).toFixed(2)}` : 'None'}</td>
+                    <td className="font-mono">{r.minimum_commit_cents ? formatCents(r.minimum_commit_cents) : 'None'}</td>
+                    <td>
+                      {r.is_active === false ? (
+                        <span className="badge badge-stale" title={r.supersedes_rule_id ? `Supersedes ${r.supersedes_rule_id}` : 'Superseded'}>
+                          Superseded
+                        </span>
+                      ) : (
+                        <span className="badge badge-resolved">Active</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+
         </div>
       )}
 
       {/* ── TAB 4: Credit Issuance ────────────────────────────────────── */}
       {activeTab === 'credits' && (() => {
         const currentLineResult = calculation?.line_results?.find(lr => lr.line_id === selectedLineId);
-        const eligibleOverchargeCents = currentLineResult && currentLineResult.difference_cents < 0 ? Math.abs(currentLineResult.difference_cents) : 0;
-        const priorLineCreditsCents = credits.filter(c => c.invoice_line_id === selectedLineId).reduce((sum, c) => sum + (c.amount_cents || 0), 0);
-        const remainingLineCapCents = Math.max(0, eligibleOverchargeCents - priorLineCreditsCents);
+        // Find finding that matches the selected line
+        const lineFinding = findings.find(f => f.calculation_line_result_id === currentLineResult?.id)
+          || (findings.length === 1 && !findings[0].calculation_line_result_id ? findings[0] : null);
+        const latestReview = lineFinding?.reviews && lineFinding.reviews.length > 0 ? lineFinding.reviews[0] : null;
+        const isAcceptedFinding = latestReview?.action === 'ACCEPT';
+
+        // Cap comes from the backend API (compute_remaining_cap) so it matches enforcement exactly
+        const eligibleOverchargeCents = capInfo?.eligible_cents ?? (currentLineResult && currentLineResult.difference_cents < 0 ? Math.abs(currentLineResult.difference_cents) : 0);
+        const priorLineCreditsCents = capInfo?.prior_credits_cents ?? 0;
+        const lineAdjustmentsCents = capInfo?.line_adjustments_cents ?? 0;
+        const caseWideAdjustmentsCents = capInfo?.case_wide_adjustments_cents ?? 0;
+        const remainingLineCapCents = capInfo?.remaining_cap_cents ?? Math.max(0, eligibleOverchargeCents - priorLineCreditsCents);
 
         return (
           <div>
@@ -898,35 +1054,49 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
               </p>
 
               <div style={{ background: 'rgba(255, 255, 255, 0.02)', padding: '1.25rem', borderRadius: 'var(--radius-md)', marginBottom: '1.5rem', border: '1px solid var(--border-subtle)' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '1rem' }}>
                   <div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Latest Review Decision</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Latest Review Decision ({selectedLineId})</div>
                     <div style={{ fontWeight: 700, color: isAcceptedFinding ? 'var(--accent-emerald)' : 'var(--accent-rose)' }}>
                       {isAcceptedFinding ? `✓ ${latestReview.action} by ${latestReview.reviewer}` : '✗ Must be ACCEPT'}
                     </div>
                   </div>
                   <div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Finding Staleness</div>
-                    <div style={{ fontWeight: 700, color: primaryFinding?.is_stale ? 'var(--accent-rose)' : 'var(--accent-emerald)' }}>
-                      {primaryFinding?.is_stale ? '✗ Stale (Re-run needed)' : '✓ Fresh Non-Stale'}
+                    <div style={{ fontWeight: 700, color: lineFinding?.is_stale ? 'var(--accent-rose)' : 'var(--accent-emerald)' }}>
+                      {lineFinding?.is_stale ? '✗ Stale (Re-run needed)' : '✓ Fresh Non-Stale'}
                     </div>
                   </div>
                   <div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Eligible Overcharge</div>
                     <div className="font-mono" style={{ fontWeight: 700, color: 'var(--accent-cyan)' }}>
-                      ${(eligibleOverchargeCents / 100).toFixed(2)}
+                      {formatCents(eligibleOverchargeCents)}
                     </div>
                   </div>
                   <div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Prior Approved Credits</div>
                     <div className="font-mono" style={{ fontWeight: 700, color: priorLineCreditsCents > 0 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
-                      ${(priorLineCreditsCents / 100).toFixed(2)}
+                      {formatCents(priorLineCreditsCents)}
                     </div>
                   </div>
                   <div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Prior Line Adjustments</div>
+                    <div className="font-mono" style={{ fontWeight: 700, color: lineAdjustmentsCents > 0 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
+                      {formatCents(lineAdjustmentsCents)}
+                    </div>
+                  </div>
+                  {caseWideAdjustmentsCents > 0 && (
+                    <div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Case-Wide Adjustments</div>
+                      <div className="font-mono" style={{ fontWeight: 700, color: 'var(--accent-amber)' }}>
+                        {formatCents(caseWideAdjustmentsCents)}
+                      </div>
+                    </div>
+                  )}
+                  <div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Remaining Line Cap</div>
                     <div className="font-mono" style={{ fontWeight: 800, color: remainingLineCapCents > 0 ? 'var(--accent-emerald)' : 'var(--accent-rose)' }}>
-                      ${(remainingLineCapCents / 100).toFixed(2)}
+                      {formatCents(remainingLineCapCents)}
                     </div>
                   </div>
                 </div>
@@ -952,7 +1122,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                   >
                     {caseData?.invoice_lines?.map((line) => (
                       <option key={line.id} value={line.id}>
-                        {line.id} — {line.description} (${(line.original_amount_cents / 100).toFixed(2)})
+                        {line.id} — {line.description} ({formatCents(line.original_amount_cents)})
                       </option>
                     ))}
                   </select>
@@ -970,7 +1140,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                     placeholder="e.g. 25.00"
                   />
                   <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                    Defaults to remaining cap: ${(remainingLineCapCents / 100).toFixed(2)}
+                    Defaults to remaining cap: {formatCents(remainingLineCapCents)}
                   </div>
                 </div>
               </div>
@@ -1001,17 +1171,47 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={() => handleApproveCredit(primaryFinding?.id, selectedResolutionOptionId)}
-                  disabled={!isAcceptedFinding || primaryFinding?.is_stale || actionLoading || remainingLineCapCents <= 0}
-                >
-                  <Lock size={15} />
-                  <span>{actionLoading ? 'Locking & Approving...' : 'Approve Credit Under Row Lock'}</span>
-                </button>
-              </div>
+              {(() => {
+                const findingLineResult = calculation?.line_results?.find(lr => lr.id === lineFinding?.calculation_line_result_id);
+                const targetFindingLineId = findingLineResult?.line_id;
+                const isLineMismatch = Boolean(targetFindingLineId && selectedLineId && targetFindingLineId !== selectedLineId);
+
+                let disableReason = null;
+                if (!lineFinding) {
+                  disableReason = `No finding available for line ${selectedLineId}`;
+                } else if (lineFinding.is_stale) {
+                  disableReason = 'Finding is stale — run billing engine and investigation first';
+                } else if (!isAcceptedFinding) {
+                  disableReason = `Latest review decision for ${selectedLineId} must be ACCEPT (currently: ${latestReview?.action || 'unreviewed'})`;
+                } else if (isLineMismatch) {
+                  disableReason = `Selected line (${selectedLineId}) does not match finding line (${targetFindingLineId})`;
+                } else if (remainingLineCapCents <= 0) {
+                  disableReason = 'Remaining allowable credit cap is $0.00';
+                }
+
+                const matchingOption = resolutionOptions.find(o => o.calculation_line_result_id === lineFinding?.calculation_line_result_id && o.option_type === 'RECOMMEND_CREDIT')
+                  || resolutionOptions.find(o => o.id === selectedResolutionOptionId)
+                  || resolutionOptions[0];
+
+                return (
+                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => handleApproveCredit(lineFinding?.id, matchingOption?.id || selectedResolutionOptionId)}
+                      disabled={Boolean(disableReason) || actionLoading}
+                    >
+                      <Lock size={15} />
+                      <span>{actionLoading ? 'Locking & Approving...' : 'Approve Credit Under Row Lock'}</span>
+                    </button>
+                    {disableReason && (
+                      <span style={{ fontSize: '0.8rem', color: '#f87171', fontWeight: 600 }}>
+                        ⚠ {disableReason}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="table-container">
@@ -1040,7 +1240,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
                         <td className="font-mono" style={{ color: 'var(--accent-cyan)' }}>{c.id}</td>
                         <td className="font-mono">{c.invoice_line_id}</td>
                         <td className="font-mono" style={{ fontWeight: 700, color: 'var(--accent-emerald)' }}>
-                          ${(c.amount_cents / 100).toFixed(2)}
+                          {formatCents(c.amount_cents)}
                         </td>
                         <td>{c.reason_code}</td>
                         <td className="font-mono" style={{ fontSize: '0.72rem' }}>
@@ -1060,7 +1260,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
         );
       })()}
 
-      {/* ── TAB 5: Audit Trail ────────────────────────────────────────── */}
+      {/* â”€â”€ TAB 5: Audit Trail â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {activeTab === 'timeline' && (
         <div className="glass-panel" style={{ padding: '1.5rem' }}>
           <h3 style={{ fontSize: '1.2rem', marginBottom: '0.4rem' }}>Immutable Append-Only Audit Trail</h3>
@@ -1097,20 +1297,32 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
         </div>
       )}
 
-      {/* ── Modals ────────────────────────────────────────────────────── */}
+      {/* â”€â”€ Modals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <EvidenceModal
         isOpen={evidenceModalOpen}
         onClose={() => setEvidenceModalOpen(false)}
         caseId={caseId}
         lineId={selectedLineId}
+        contractRules={caseData?.contract_rules || []}
+        invoiceLines={caseData?.invoice_lines || []}
         onEvidenceUploaded={loadAllCaseData}
       />
 
       {/* Human Review Modal */}
       {reviewModalOpen && (
-        <div className="modal-overlay" onClick={() => setReviewModalOpen(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ fontSize: '1.35rem', marginBottom: '0.5rem' }}>Human-in-the-Loop Review</h3>
+        <div
+          className="modal-overlay"
+          onClick={() => setReviewModalOpen(false)}
+          onKeyDown={(e) => { if (e.key === 'Escape') setReviewModalOpen(false); }}
+        >
+          <div
+            className="modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="review-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="review-modal-title" style={{ fontSize: '1.35rem', marginBottom: '0.5rem' }}>Human-in-the-Loop Review</h3>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
               Accept, edit, or reject the AI finding. Raw AI text is permanently preserved for audit compliance.
             </p>
@@ -1179,3 +1391,4 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
     </div>
   );
 }
+

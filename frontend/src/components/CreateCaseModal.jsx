@@ -1,9 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Sparkles, Plus, AlertCircle } from 'lucide-react';
 import { createCase, uploadEvidence } from '../api/client';
 
+const generateShortId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID().slice(0, 8);
+  }
+  return Date.now().toString().slice(-6);
+};
+
 export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
-  const [caseId, setCaseId] = useState(`case-${Date.now().toString().slice(-6)}`);
+  const [caseId, setCaseId] = useState(`case-${generateShortId()}`);
   const [customerName, setCustomerName] = useState('Acme Corp');
   const [title, setTitle] = useState('API Gateway Rate Discrepancy');
   const [disputeDescription, setDisputeDescription] = useState('Customer reports overcharge of $25.00 on production API calls. Telemetry logs show staging calls were improperly counted towards billable tier.');
@@ -17,14 +24,44 @@ export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
   const [selectedScenario, setSelectedScenario] = useState('custom');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const modalRef = useRef(null);
 
   useEffect(() => {
     if (isOpen) {
-      setCaseId(`case-${Date.now().toString().slice(-6)}`);
+      setCaseId(`case-${generateShortId()}`);
       setError(null);
       setSelectedScenario('custom');
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key === 'Tab' && modalRef.current) {
+        const focusables = modalRef.current.querySelectorAll(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -201,11 +238,17 @@ export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+    <div 
+      className="modal-overlay" 
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="create-case-title"
+    >
+      <div ref={modalRef} className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
           <div>
-            <h3 style={{ fontSize: '1.35rem' }}>Create Billing Dispute Case</h3>
+            <h3 id="create-case-title" style={{ fontSize: '1.35rem' }}>Create Billing Dispute Case</h3>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
               Initialize dispute metadata, invoice lines, and contractual pricing rules.
             </p>

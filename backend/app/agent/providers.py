@@ -312,3 +312,18 @@ def get_provider(name: str) -> LLMProvider:
         )
     else:
         raise ValueError(f"Unknown LLM provider: '{name}'")
+
+
+def has_configured_provider() -> bool:
+    """Returns True if mock mode is active, or at least one configured provider has a key."""
+    if settings.llm_mode == "mock":
+        return True
+    provider_names = [p.strip().lower() for p in settings.llm_providers.split(",") if p.strip()]
+    for p_name in provider_names:
+        try:
+            p = get_provider(p_name)
+            if p.is_configured:
+                return True
+        except Exception:
+            continue
+    return False

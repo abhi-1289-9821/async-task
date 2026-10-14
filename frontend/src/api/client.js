@@ -8,13 +8,33 @@
 const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 
 // Tokens are strictly user-supplied or loaded from session/localStorage.
-// In dev mode only (import.meta.env.DEV), falls back to local demo token for convenience.
-// In production builds, import.meta.env.DEV compiles to false and is tree-shaken away with 0 secrets baked in.
+// In dev mode only (import.meta.env.DEV), falls back to VITE_DEV_REVIEWER_TOKEN / VITE_DEV_VIEWER_TOKEN if present.
 export function getToken(role = currentRole) {
   if (role === 'REVIEWER') {
-    return localStorage.getItem('billing_reviewer_token') || sessionStorage.getItem('billing_reviewer_token') || 'demo-reviewer-token-2026';
+    const saved = localStorage.getItem('billing_reviewer_token') || sessionStorage.getItem('billing_reviewer_token');
+    if (saved) return saved;
+    if (import.meta.env.DEV && import.meta.env.VITE_DEV_REVIEWER_TOKEN) {
+      return import.meta.env.VITE_DEV_REVIEWER_TOKEN;
+    }
+    return '';
   }
-  return localStorage.getItem('billing_viewer_token') || sessionStorage.getItem('billing_viewer_token') || 'demo-viewer-token-2026';
+  const savedViewer = localStorage.getItem('billing_viewer_token') || sessionStorage.getItem('billing_viewer_token');
+  if (savedViewer) return savedViewer;
+  if (import.meta.env.DEV && import.meta.env.VITE_DEV_VIEWER_TOKEN) {
+    return import.meta.env.VITE_DEV_VIEWER_TOKEN;
+  }
+  return '';
+}
+
+export function hasActiveToken(role = currentRole) {
+  return Boolean(getToken(role));
+}
+
+export function hasUserSavedToken(role = currentRole) {
+  if (role === 'REVIEWER') {
+    return Boolean((localStorage.getItem('billing_reviewer_token') || sessionStorage.getItem('billing_reviewer_token') || '').trim());
+  }
+  return Boolean((localStorage.getItem('billing_viewer_token') || sessionStorage.getItem('billing_viewer_token') || '').trim());
 }
 
 let currentRole = 'REVIEWER';
@@ -74,6 +94,9 @@ async function request(endpoint, options = {}) {
   }
 
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('authError', { detail: { status: 401 } }));
+    }
     let rawDetail = data?.reason || data?.status_reason || data?.detail || data?.message || response.statusText || 'Request failed';
     let errorMsg = rawDetail;
     if (Array.isArray(rawDetail)) {
@@ -116,6 +139,11 @@ export const uploadEvidence = (id, payload) => request(`/api/cases/${id}/evidenc
   method: 'POST',
   body: JSON.stringify(payload),
 });
+export const uploadRulesEvidence = (id, payload) => request(`/api/cases/${id}/evidence/rules`, {
+  method: 'POST',
+  body: JSON.stringify(payload),
+});
+
 
 // ── Calculations ────────────────────────────────────────────────────────────
 export const runCalculation = (caseId) => request('/api/calculations/run', {
@@ -145,3 +173,6 @@ export const approveCredit = (payload) => request('/api/credits/approve', {
   body: JSON.stringify(payload),
 });
 export const getCaseCredits = (caseId) => request(`/api/credits/case/${caseId}`);
+export const getCreditCap = (caseId, invoiceLineId) =>
+  request(`/api/credits/case/${caseId}/cap?invoice_line_id=${encodeURIComponent(invoiceLineId)}`);
+

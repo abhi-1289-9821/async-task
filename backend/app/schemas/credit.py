@@ -9,6 +9,15 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class CreditCapResponse(BaseModel):
+    """Read-only cap breakdown for a given invoice line. Returned by GET /api/credits/case/{id}/cap."""
+    eligible_cents: int
+    prior_credits_cents: int
+    line_adjustments_cents: int
+    case_wide_adjustments_cents: int
+    remaining_cap_cents: int
+
+
 class CreditApproveRequest(BaseModel):
     case_id: str = Field(..., min_length=1, max_length=36)
     invoice_line_id: str = Field(..., min_length=1, max_length=36)
@@ -25,6 +34,7 @@ class CreditResponse(BaseModel):
 
     id: str
     case_id: str
+    invoice_line_id: str
     resolution_option_id: Optional[str] = None
     calculation_line_result_id: Optional[int] = None
     idempotency_key: str
@@ -34,3 +44,4 @@ class CreditResponse(BaseModel):
     approved_by: str
     approved_at: datetime
     created_at: datetime
+

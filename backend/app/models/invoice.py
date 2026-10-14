@@ -19,6 +19,7 @@ from typing import Optional
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -102,6 +103,8 @@ class ContractRule(Base):
     included_units: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     overage_rate_cents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     exempt_environments: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    supersedes_rule_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     case: Mapped["Case"] = relationship(back_populates="contract_rules", overlaps="contract_rules,invoice_line")  # noqa: F821

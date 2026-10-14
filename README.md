@@ -1,46 +1,50 @@
-# FairBill — Billing Dispute Investigation & Resolution Agent
+# FairBill — Autonomous Billing Dispute Investigation & Governance Agent
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
+[![React 19](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1.2+-purple.svg)](https://langchain-ai.github.io/langgraph/)
 
-A full-stack AI-assisted application designed to investigate, recalculate, and resolve SaaS and cloud billing disputes. The system pairs a deterministic pricing engine for financial math with an agentic investigation workflow, human-in-the-loop review, and immutable audit logging.
+A full-stack, AI-assisted platform engineered to investigate, recalculate, and resolve SaaS and cloud billing disputes. The system pairs a **pure deterministic pricing engine** for financial mathematics with an **autonomous LangGraph investigation agent**, human-in-the-loop review, and immutable audit logging.
+
+---
+
+## 🌐 Live Demo & Deployment Credentials
+
+> [!NOTE]
+> The tokens below are **demo-only credentials** provisioned for reviewer evaluation on this deployment. Real production deployments require custom high-entropy secrets set via environment variables.
+
+- **Deployed Live URL:** `https://billing-dispute-agent.onrender.com` *(or local: `http://localhost:5173`)*
+- **Demo Reviewer Token:** `demo-reviewer-token-2026` *(permissions: run calculations, trigger investigations, review findings, approve credits, upload amendments)*
+- **Demo Viewer Token:** `demo-viewer-token-2026` *(permissions: read-only access to dispute cases, audit logs, and calculation breakdowns)*
 
 ---
 
 ## 📑 Table of Contents
 
-- [The Problem & Approach](#-the-problem--approach)
+- [The Problem & Architectural Invariants](#-the-problem--architectural-invariants)
 - [System Architecture](#-system-architecture)
-- [Implemented Features (Phase 1 & Phase 2 Tested)](#-implemented-features-phase-1--phase-2-tested)
-  - [1. Pure Deterministic Billing Engine](#1-pure-deterministic-billing-engine)
-  - [2. Database Models & Schema](#2-database-models--schema)
-  - [3. SQLite Append-Only Triggers](#3-sqlite-append-only-triggers)
-  - [4. State Machine & Staleness Invalidation](#4-state-machine--staleness-invalidation)
-  - [5. Human-in-the-Loop Finding Review](#5-human-in-the-loop-finding-review)
-  - [6. Concurrency-Safe Idempotent Credit Approval](#6-concurrency-safe-idempotent-credit-approval)
-  - [7. Bearer Token Auth & Roles](#7-bearer-token-auth--roles)
-  - [8. Agentic Investigation Workflow (Phase 3)](#8-agentic-investigation-workflow-phase-3)
-  - [9. Frontend Audit Workspace (Phase 4)](#9-frontend-audit-workspace-phase-4)
-- [Excluded Scope](#-excluded-scope)
+- [Auto-Seeded Demonstration Cases](#-auto-seeded-demonstration-cases)
+- [Step-by-Step Reviewer Walkthrough](#-step-by-step-reviewer-walkthrough)
+- [Core Features & Engineering Implementation](#-core-features--engineering-implementation)
+- [Scope: Completed vs Excluded](#-scope-completed-vs-excluded)
 - [Known Limitations](#-known-limitations)
-- [API Routes](#-api-routes)
-- [Deployment](#-deployment)
-- [Test Suite & Verification (119 Passing Tests, 1 Skipped)](#-test-suite--verification-119-passing-tests-1-skipped)
-- [Quickstart & Local Setup](#-quickstart--local-setup)
-- [Implementation Roadmap](#-implementation-roadmap)
-- [Documentation & Engineering Logs](#-documentation--engineering-logs)
+- [API Route Reference](#-api-route-reference)
+- [Deployment & Database Migrations](#-deployment--database-migrations)
+- [Automated Test Suite (143 Passed, 1 Skipped)](#-automated-test-suite-143-passed-1-skipped)
+- [Local Setup & Verification](#-local-setup--verification)
 
 ---
 
-## 🎯 The Problem & Approach
+## 🎯 The Problem & Architectural Invariants
 
-In SaaS and metered cloud infrastructure billing, disputes regularly occur when customers identify discrepancies in multi-tier usage, minimum commitments, or environment-specific charges.
+Metered cloud and SaaS disputes arise when customer telemetry conflicts with complex contractual terms: graduated vs volume pricing brackets, environment exemptions (staging vs production), minimum spend commitments, and percentage discounts.
 
-### Why Separate Calculation From Generative AI?
-LLMs are probabilistic models prone to numerical errors and rounding inconsistencies when evaluating pricing tiers or calculating discounts. This architecture enforces a clear boundary:
-- **Financial Calculation (Deterministic Engine):** Executed purely in Python using `Decimal`, integer cents, and explicit `ROUND_HALF_UP` rounding. The LLM does not calculate billing figures.
-- **Investigation & Narration (Implemented - Phase 3):** An agentic workflow synthesizes narrative findings and drafts correspondence, citing cryptographic calculation result anchors (`result_id`).
-- **Human Governance:** Financial credit issuance requires human reviewer approval.
+### Non-Negotiable Ground Rules
+1. **Deterministic Financial Math Only**: Money is calculated strictly in Python using standard library `Decimal`, integer cents ($10.00 = 1000$ cents), and `ROUND_HALF_UP` boundary rounding in [`backend/app/billing_engine.py`](backend/app/billing_engine.py). **The LLM never computes, invents, or changes financial figures.**
+2. **AI Reasoner & Narrator**: LangGraph and LLM providers formulate structured findings, explanation hypotheses, and proposed resolutions, citing immutable cryptographic result IDs (`result_id`).
+3. **Fail-Loud Guarantee (No Mocking in Production)**: When `LLM_MODE=real`, the system never fakes or fabricates AI findings. If upstream providers fail or timeout, the run transitions to `FAILED`, appends an `INVESTIGATION_RUN_FAILED` audit event, and returns **HTTP 502 Bad Gateway**. If no LLM provider is configured, it returns **HTTP 503 Service Unavailable**.
+4. **Zero Bundle Secrets**: Client tokens are strictly user-supplied or loaded from session/local storage. No demo tokens or API keys exist in client build bundles.
 
 ---
 
@@ -48,326 +52,240 @@ LLMs are probabilistic models prone to numerical errors and rounding inconsisten
 
 ```
                                   ┌─────────────────────────────────────────┐
-                                  │           FastAPI Web Service           │
-                                  │               [IMPLEMENTED]             │
+                                  │           FastAPI REST Service          │
+                                  │   (Auth, Routers, Lifespan Auto-Seed)   │
                                   └────────────────────┬────────────────────┘
                                                        │
          ┌─────────────────────────────────────────────┼─────────────────────────────────────────────┐
          ▼                                             ▼                                             ▼
 ┌─────────────────────────────────┐       ┌─────────────────────────────────┐       ┌─────────────────────────────────┐
 │     Deterministic Engine        │       │      Agentic Investigation      │       │     Credit Approval Service     │
-│         [IMPLEMENTED]           │       │          [IMPLEMENTED]          │       │          [IMPLEMENTED]          │
-│  - Integer cents arithmetic     │       │  - LangGraph state graph        │       │  - Row-level lock concurrency   │
-│  - Graduated vs Volume tiers    │       │  - Gemini API integration       │       │  - Cumulative credit cap check  │
-│  - Included units & overage     │       │  - Result ID citation check     │       │  - SHA-256 idempotency key      │
-│  - Malformed usage quarantine   │       │  - Finding reviews table        │       │  - 409 conflict handling        │
-│  - SHA-256 result anchors       │       │  - Preserves raw vs edited text │       │  - Requires accepted finding    │
+│   (backend/app/billing_engine)  │       │     (LangGraph Multi-Node)      │       │   (backend/app/credit_service)  │
+│  - Integer cents arithmetic     │       │  - Multi-provider fallback      │       │  - Row-level lock concurrency   │
+│  - Graduated vs Volume slabs    │       │  - Per-line finding synthesis   │       │  - Shared compute_remaining_cap │
+│  - Included units & overage     │       │  - Citation & amount validators │       │  - SHA-256 idempotency key      │
+│  - Environment & period filters │       │  - Engine-derived finding types │       │  - 409 Conflict on duplicates   │
+│  - SHA-256 result anchors       │       │  - 180s TTL abandoned reaper    │       │  - Requires accepted finding    │
 └────────────────┬────────────────┘       └────────────────┬────────────────┘       └────────────────┬────────────────┘
                  │                                         │                                         │
                  └─────────────────────────────────────────┼─────────────────────────────────────────┘
                                                            ▼
                                   ┌─────────────────────────────────────────┐
-                                  │          Relational Storage             │
-                                  │  - 14 SQLAlchemy ORM Tables [DONE]      │
-                                  │  - SQLite foreign keys & WAL mode [DONE]│
-                                  │  - SQLite append-only triggers [DONE]   │
-                                  │  - PostgreSQL support configured [DONE] │
+                                  │       Relational Storage & Audit        │
+                                  │  - 14 SQLAlchemy ORM Tables             │
+                                  │  - Partial Unique Index on RUNNING runs │
+                                  │  - Append-only DDL triggers             │
+                                  │  - Alembic migrations & create_all      │
                                   └─────────────────────────────────────────┘
 ```
 
 ---
 
-## ✅ Implemented Features (Phase 1 & Phase 2 Tested)
+## 📦 Auto-Seeded Demonstration Cases
 
-All items below are implemented in code and covered by passing automated unit tests:
+On startup against an empty database, `backend/app/seed.py` idempotently seeds three foundational dispute scenarios:
+
+1. **`case-acme-101` — Metered API Tier Overcharge (Confirmed Discrepancy)**
+   - **Contract Rule:** `PER_UNIT` at 10 cents/unit; `exempt_environments: ["staging", "test"]`.
+   - **Billed Amount:** $50.00 (5000 cents).
+   - **Usage Telemetry:** 250 production units + 150 staging units.
+   - **Prior Adjustment:** One line-item adjustment of $5.00 (500 cents).
+   - **What it demonstrates:** Deterministic environment filtering (staging exempt), calculation discrepancy ($25.00 vs $50.00 billed = $25.00 overcharge), and cumulative credit cap deduction ($25.00 eligible - $5.00 prior adjustment = **$20.00 remaining cap**).
+2. **`case-bravo-102` — Competing Tiered Clauses (Contract Ambiguity)**
+   - **Contract Rule:** Competing `TIERED_GRADUATED` and `TIERED_VOLUME` rules on the same line (tier 1: up to 100 @ 15c; tier 2: unbounded @ 10c).
+   - **Billed Amount:** $40.00 (4000 cents).
+   - **Usage Telemetry:** 200 production units.
+   - **What it demonstrates:** Engine status **`AMBIGUOUS`** returning two concrete interpretations (Graduated = $25.00, Volume = $20.00; difference = 0 cents). AI generates finding type `CONTRACT_AMBIGUITY`, credit approval is blocked, and uploading a contract amendment (`POST /api/cases/{id}/evidence/rules`) supersedes the conflicting rule and resolves ambiguity.
+3. **`case-delta-103` — Clean Invoice Verification (No Discrepancy)**
+   - **Contract Rule:** `FLAT` at 10000 cents ($100.00).
+   - **Billed Amount:** $100.00 (10000 cents).
+   - **Usage Telemetry:** None required.
+   - **What it demonstrates:** Engine status **`OK`** with zero difference cents. Proves clean reconciliation where no credit is eligible.
+
+---
+
+## 🚶 Step-by-Step Reviewer Walkthrough
+
+Follow this end-to-end journey in the UI to evaluate the complete dispute governance lifecycle:
+
+1. **Select or Open Case:**
+   - In the Disputes table, click on **`case-acme-101`**.
+2. **Execute Deterministic Calculation:**
+   - Under the **Deterministic Engine** tab, review the pre-computed run or click **"Execute Deterministic Calculation"**.
+   - Observe line item reconciliation: 250 billable units @ 10c = $25.00; 150 staging units marked exempt ($0.00); billed $50.00 $\rightarrow$ discrepancy of **-$25.00 (Overcharge)**.
+3. **Trigger Autonomous Investigation:**
+   - Switch to the **AI Investigation** tab and click **"Trigger Investigation Run"**.
+   - The LangGraph workflow executes. Review the generated finding anchored to `line-acme-api` with engine-derived type `CONFIRMED_CALCULATION_DISCREPANCY` and resolution options.
+4. **Human Review Finding:**
+   - Click **"Review Finding"** $\rightarrow$ select **`ACCEPT`** $\rightarrow$ enter a justification note $\rightarrow$ click **"Submit Review"**.
+   - Notice the status badge updates to **Accepted**, enabling credit approval.
+5. **Inspect Credit Cap & Approve Credit:**
+   - Switch to the **Credit Issuance** tab.
+   - Notice the backend cap endpoint displays: Eligible: $25.00, Prior Adjustments: $5.00, **Remaining Cap: $20.00**.
+   - Select the accepted finding and click **"Approve & Issue Credit"**.
+   - The credit row appears in the table with `invoice_line_id: line-acme-api`. Remaining Cap immediately drops to **$0.00**, and the approve button disables with reason *"Credit cap exhausted ($0.00 remaining)"*.
+   - Attempting duplicate submission displays the toast: *"Credit already approved for this finding"*.
+6. **Upload Contract Amendment & Observe Invalidation:**
+   - Open **"Upload Evidence"** $\rightarrow$ select the **"Contract / Adjustment"** tab.
+   - Add an amendment rule or adjustment.
+   - Upon upload, notice: Case evidence version bumps (v1 $\rightarrow$ v2), prior findings and options are flagged **STALE** with visible stale reasons, and the UI prompts for re-investigation.
+
+---
+
+## 🛠️ Core Features & Engineering Implementation
 
 ### 1. Pure Deterministic Billing Engine
-Implemented in [`backend/app/billing_engine.py`](backend/app/billing_engine.py):
-- **Integer Cents Representation:** Stores all prices, billing quantities, and totals as integer cents ($10.00 = 1000$ cents) to prevent floating-point representation drift.
-- **Boundary Rounding:** Uses Python's standard `Decimal` type with `ROUND_HALF_UP` applied once at the final line-item calculation boundary.
-- **Supported Pricing Rules:**
-  - `FLAT`: Fixed fee independent of event count.
-  - `PER_UNIT`: Standard linear unit pricing.
-  - `TIERED_GRADUATED`: Marginal tiering where usage spans multiple pricing brackets.
-  - `TIERED_VOLUME`: Retroactive slab tiering where total volume determines the unit price for all units, with inclusive upper bounds.
-  - `INCLUDED_UNITS`: Included allowance with dedicated overage rates.
-  - `DISCOUNT_PCT`: Percentage discounts applied after base pricing.
-  - `MINIMUM_COMMIT`: Spend floor enforcement evaluated after discounts.
-- **Defensive Data Handling:**
-  - **Quarantine:** Identifies negative usage values and isolates them into quarantined records without aborting the engine run; returns status `PARTIAL`.
-  - **Ambiguity Branching:** When a tiered rule does not declare whether it is graduated or volume, the engine generates both concrete financial interpretations and sets status to `AMBIGUOUS`.
-  - **Missing Rules:** Unmapped invoice lines return status `INSUFFICIENT_DATA`.
-  - **Deterministic Result Anchors:** Emits an immutable `result_id` (`res_` + SHA-256 slice of normalized inputs) and overall `result_hash` for repeatability.
+- Implemented in [`backend/app/billing_engine.py`](backend/app/billing_engine.py).
+- Supported rules: `FLAT`, `PER_UNIT`, `TIERED_GRADUATED`, `TIERED_VOLUME`, `INCLUDED_UNITS`, `DISCOUNT_PCT`, `MINIMUM_COMMIT`.
+- Billing period enforcement: Events outside `[period_start, period_end]` are quarantined with reason `"Outside billing period"`.
+- Cryptographic anchors: Emits an immutable `result_id` (`res_` + SHA-256) per line item.
 
-### 2. Database Models & Schema
-Implemented in [`backend/app/models/`](backend/app/models/):
-- 14 SQLAlchemy ORM models across [`case.py`](backend/app/models/case.py), [`invoice.py`](backend/app/models/invoice.py), [`usage.py`](backend/app/models/usage.py), [`calculation.py`](backend/app/models/calculation.py), [`investigation.py`](backend/app/models/investigation.py), and [`credit.py`](backend/app/models/credit.py).
-- Foreign key constraints, lookup indexes, and JSON column mappings for tiered structures and environment exemption lists.
-- `FindingReview` schema designed to store original AI text alongside separate reviewer modifications, notes, and approval status (`ACCEPT`, `EDIT`, `REJECT`).
-- `Credit` schema with a `UNIQUE` constraint on `idempotency_key` and foreign key to `invoice_lines`.
+### 2. Multi-Provider LLM Resilience
+- Implemented in [`backend/app/agent/providers.py`](backend/app/agent/providers.py) and [`llm_client.py`](backend/app/agent/llm_client.py).
+- Fallback chain: **Gemini (primary) $\rightarrow$ Groq $\rightarrow$ OpenRouter**.
+- Automatic retry on 429/5xx/timeout; immediate failover on 401/403/404.
+- Verify live connectivity anytime with:
+  ```bash
+  python backend/scripts/check_llm.py
+  ```
 
-### 3. SQLite Append-Only Triggers
-Implemented in [`backend/app/database.py`](backend/app/database.py):
-- Connect listener on SQLite enabling `PRAGMA foreign_keys = ON` and `PRAGMA journal_mode = WAL`.
-- Physical database triggers installed on `case_events` and `calculation_line_results` that execute `SELECT RAISE(ABORT, '...')` on any attempted `UPDATE` or `DELETE` query, raising an `IntegrityError`.
+### 3. Concurrency-Safe Credit Approval
+- Implemented in [`backend/app/services/credit_service.py`](backend/app/services/credit_service.py).
+- Row-level lock: `SELECT FOR UPDATE` on PostgreSQL; `BEGIN IMMEDIATE` on SQLite.
+- Shared cap computation: `compute_remaining_cap` verifies line and case-wide adjustments.
+- Idempotency key: `SHA-256(case_id:invoice_line_id:finding_id)` strictly blocks repeat credits with HTTP 409.
 
-### 4. State Machine & Staleness Invalidation
-Implemented in [`backend/app/services/transition_service.py`](backend/app/services/transition_service.py):
-- **Allowed transitions:**
-  - `OPEN` $\rightarrow$ `AWAITING_INFO`, `RESOLVED`
-  - `AWAITING_INFO` $\rightarrow$ `OPEN`, `RESOLVED`
-  - `RESOLVED` $\rightarrow$ `REOPENED` *(reopening is only permitted from RESOLVED)*
-  - `REOPENED` $\rightarrow$ `OPEN`, `AWAITING_INFO`, `RESOLVED`
-- **Invalid transitions:** Returns HTTP **409 Conflict**.
-- **Evidence versioning:** Uploading new evidence in *any* status increments `case.evidence_version`, flags all existing findings and resolution options as `is_stale = True`, and transitions status to `REOPENED` if arriving from `RESOLVED`.
-- Appends immutable `STATUS_CHANGED` and `EVIDENCE_UPLOADED` audit events.
-
-### 5. Human-in-the-Loop Finding Review
-Implemented in [`backend/app/routers/findings.py`](backend/app/routers/findings.py):
-- `POST /api/findings/{id}/review`: Supports `ACCEPT`, `EDIT`, and `REJECT`.
-- Original raw AI text is permanently preserved; reviewer edits and notes are stored separately.
-- Attributed with the reviewer identity and timestamp.
-
-### 6. Concurrency-Safe Idempotent Credit Approval
-Implemented in [`backend/app/services/credit_service.py`](backend/app/services/credit_service.py):
-- **Concurrency Locking:** Acquires an exclusive row-level lock on the target invoice line (`SELECT FOR UPDATE` on PostgreSQL / `BEGIN IMMEDIATE` on SQLite).
-- **Prerequisite Validation:** Rejects stale findings (HTTP 400) and requires an accepted human review (`ACCEPT`).
-- **Cumulative Cap Invariant:** Enforces that requested credit does not exceed `eligible_overcharge - prior_credits - adjustments`. Cap exhaustion returns HTTP 400.
-- **Idempotency:** Computes `SHA-256(case_id + invoice_line_id + reason_code)`. Duplicate requests return HTTP **409 Conflict**.
-
-### 7. Bearer Token Auth & Roles
-Implemented in [`backend/app/middleware/auth.py`](backend/app/middleware/auth.py):
-- Inspects `Authorization: Bearer <token>` header. Missing or invalid tokens return HTTP 401 Unauthorized (`WWW-Authenticate: Bearer`).
-- Roles: `REVIEWER` (mutating actions permitted) and `VIEWER` (read-only access; mutating attempts return HTTP 403 Forbidden).
+### 4. Append-Only Audit Logging & Storage Triggers
+- Physical SQLite triggers (`RAISE(ABORT)`) and PostgreSQL triggers block application-level `UPDATE` and `DELETE` queries on `case_events`, `calculation_line_results`, `credits`, `finding_reviews`, and `evidence_versions`.
 
 ---
 
-### 8. Agentic Investigation & Multi-Provider LLM Resilience
-Implemented in [`backend/app/agent/`](backend/app/agent/):
-- **LangGraph StateGraph:** Multi-node execution pipeline (`gather_evidence` -> `run_calculation` -> `analyze_findings` -> `formulate_options` -> `validate_and_sanitize` -> `persist_results`).
-- **Multi-Provider Fallback Hierarchy:**
-  - Configurable fallback chain via `LLM_PROVIDERS` (default: `gemini,groq,openrouter`).
-  - **GeminiProvider:** Primary provider using official `google-genai` SDK (`GEMINI_API_KEY`, `GEMINI_MODEL`).
-  - **OpenAICompatProvider:** Resilient HTTP provider using `httpx` for Groq (`GROQ_API_KEY`, `GROQ_MODEL`) and OpenRouter (`OPENROUTER_API_KEY`, `OPENROUTER_MODEL`).
-  - **Auto-Recovery on Schema Constraints:** If an open-weights model rejects `response_format={"type":"json_object"}` (HTTP 400), it automatically retries once without it and extracts JSON from markdown code fences.
-- **Quota & Free-Tier Resilience:**
-  - **HTTP 429 (Rate Limits) / 5xx Server Errors / Timeouts:** Waits 1s and retries once; on repeated failure, advances to next provider in sequence.
-  - **HTTP 401/403 (Auth Errors) & 404 (Model Not Found):** Immediately skipped without retry.
-  - **Malformed JSON:** If a provider produces non-JSON output, it is treated as a provider failure and immediately falls through to the next provider.
-  - **Execution Deadline:** Total LLM execution time bounded to 40s per call.
-- **Fail-Loud Guarantee (Never Mock in Real Mode):**
-  - When `LLM_MODE=real`, the system strictly refuses to fabricate or mock AI findings.
-  - If all providers fail: persists a `FAILED` `InvestigationRun`, writes an append-only `INVESTIGATION_RUN_FAILED` audit event to `case_events` with actor, sanitized reason, and attempts history, and returns **HTTP 502 Bad Gateway** with `{id, run_id, status: "FAILED", reason}`.
-- **Traceability & Secret Isolation:**
-  - Records provider name, model, token counts, and failure attempts list in `InvestigationRun.token_usage`.
-  - Structured JSON logging (`logger="llm"`) with run ID, provider, model, attempt, latency, status, error type, and token counts. API keys, Authorization headers, and prompts are never logged.
-  - Diagnostic CLI probe: `python backend/scripts/check_llm.py` pings all configured providers and reports latency/status without printing secrets.
-  - Configuration status probe: `GET /api/llm/status` (any authenticated role) reports `configured` (bool) and model per provider.
-- **Data Flow & Multi-Vendor Privacy Notice:**
-  - Customer dispute descriptions and anonymized calculation metrics are transmitted to the active provider in `LLM_PROVIDERS` (Google Gemini, Groq, OpenRouter) for narrative analysis.
-  - Organizations with strict single-vendor data residency can set `LLM_PROVIDERS=gemini` to restrict processing exclusively to Google infrastructure.
+## ⚖️ Scope: Completed vs Excluded
 
-### 9. Frontend Audit Workspace (Phase 4)
-Implemented in [`frontend/`](frontend/):
-- Modern dark-mode Single Page Application built with React 19, Vite, and custom CSS design tokens.
-- Interactive dispute workspace featuring deterministic recalculation explorer, LangGraph AI investigation runner with live LLM provider badge (`LLM: provider (model)`), human review modal (`ACCEPT`, `EDIT`, `REJECT`), and credit approval panel.
-- Demonstration presets for instant reproducible testing of multi-tier discrepancies, ambiguous contract rules, clean calculations, and prompt injection defense.
+### Completed Scope
+- [x] Pure deterministic calculation engine with Decimal math and boundary rounding.
+- [x] LangGraph multi-node autonomous investigation with multi-provider fallback.
+- [x] Per-line finding generation and independent resolution options.
+- [x] Deterministic engine-derived finding types replacing contradictory AI text.
+- [x] Repeat-run atomic guard via database partial unique index with 180s TTL reaper.
+- [x] Contract rule amendments with superseding (`is_active=False`) and content hashing.
+- [x] Billing period usage filtering (`period_start`, `period_end`).
+- [x] Accessible dark-mode React UI with separate non-flickering refresh states.
 
----
-
-## 🚫 Excluded Scope
-
-To maintain project focus and feasibility, the following areas are explicitly out of scope:
-1. **Tax Calculation:** Tax logic, VAT, state sales taxes, and jurisdiction-specific tax exemptions are excluded.
-2. **Real Payment Gateway Integration:** The application issues mock credit records for internal dispute resolution. It does not integrate with Stripe, Adyen, or banking rails.
-3. **PDF / OCR Invoice Extraction:** Invoices and usage data are ingested via structured JSON REST API payloads and presets, not via unstructured document OCR.
-4. **ERP / Accounting Ledger Syncing:** Synchronization with external accounting platforms (NetSuite, QuickBooks) is not implemented.
+### Excluded Scope
+- **Tax Calculation:** VAT, sales taxes, and jurisdiction exemptions are excluded.
+- **Payment Gateway Rails:** Mock credit entries are generated; direct Stripe/banking integration is excluded.
+- **Unstructured OCR:** Ingestion uses structured JSON API payloads and presets; OCR extraction is excluded.
+- **External Accounting Sync:** ERP synchronization (e.g. NetSuite/QuickBooks) is excluded.
 
 ---
 
 ## ⚠️ Known Limitations
 
-1. **Database Triggers Scope:** While database triggers block application-level `UPDATE` and `DELETE` statements, a database administrator or privileged user with DDL permissions can drop triggers.
-2. **Usage Quarantine Validation:** Current event quarantine checks for negative quantities, missing `line_id`/`event_id`, and non-string environment fields. It does not validate environments against an enforced whitelist enum.
-3. **Single Discount Rule:** The engine currently supports a single percentage discount per line item. Multiple discounts on the same line trigger an `AMBIGUOUS` status.
-4. **SQLite Concurrency:** Local development uses SQLite in WAL mode. Concurrency row-locking is designed for production PostgreSQL (`SELECT FOR UPDATE`).
+1. **Privileged DB Users**: Triggers protect against application-level modifications; database administrators with direct DDL access can disable triggers.
+2. **SQLite vs PostgreSQL Concurrency**: Concurrency row-locking is fully backed by `SELECT FOR UPDATE` in PostgreSQL; SQLite relies on `BEGIN IMMEDIATE`.
+3. **Single Discount Rule**: One percentage discount is supported per line; multiple discounts yield `AMBIGUOUS`.
 
 ---
 
-## 🔌 API Routes
+## 🔌 API Route Reference
 
 | Method | Endpoint | Description | Status |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/api/cases` | Create a new dispute case | **Implemented** |
-| `GET` | `/api/cases` | List all dispute cases | **Implemented** |
-| `GET` | `/api/cases/{id}` | Retrieve case details, lines, and rules | **Implemented** |
-| `POST` | `/api/cases/{id}/transition` | Transition case status (returns 409 if invalid) | **Implemented** |
-| `GET` | `/api/cases/{id}/events` | Retrieve immutable append-only audit trail | **Implemented** |
-| `POST` | `/api/cases/{id}/evidence` | Upload usage evidence (bumps version, marks stale) | **Implemented** |
-| `POST` | `/api/calculations/run` | Execute deterministic billing engine on evidence | **Implemented** |
-| `GET` | `/api/calculations/{id}` | Retrieve calculation result by ID | **Implemented** |
-| `GET` | `/api/calculations/case/{case_id}` | Retrieve all calculations for a case | **Implemented** |
-| `POST` | `/api/cases/{case_id}/investigations` | Run autonomous LangGraph investigation (502 on failure) | **Implemented** |
-| `GET` | `/api/cases/{case_id}/investigations` | List investigation runs for a case | **Implemented** |
-| `GET` | `/api/investigations/{id}` | Retrieve full details of an investigation run | **Implemented** |
-| `GET` | `/api/findings/case/{case_id}` | List findings and review history for a case | **Implemented** |
-| `POST` | `/api/findings/{id}/review` | Submit human review (`ACCEPT`, `EDIT`, `REJECT`) | **Implemented** |
-| `POST` | `/api/credits/approve` | Approve credit under row lock and cap check | **Implemented** |
-| `GET` | `/api/credits/case/{case_id}` | List approved credits for a case | **Implemented** |
-| `GET` | `/api/llm/status` | List LLM provider configuration status and model names | **Implemented** |
-| `GET` | `/healthz` | Health check probe | **Implemented** |
+| `POST` | `/api/cases` | Create a dispute case with lines and rules | **201 Created** |
+| `GET` | `/api/cases` | List all dispute cases | **200 OK** |
+| `GET` | `/api/cases/{id}` | Get case metadata, lines, and active rules | **200 OK** |
+| `POST` | `/api/cases/{id}/transition` | Transition status (`OPEN`, `AWAITING_INFO`, `RESOLVED`, `REOPENED`) | **200 OK / 409** |
+| `GET` | `/api/cases/{id}/events` | Read append-only audit trail | **200 OK** |
+| `POST` | `/api/cases/{id}/evidence` | Upload usage telemetry events (bumps version) | **200 OK / 409 / 422** |
+| `POST` | `/api/cases/{id}/evidence/rules` | Upload contract rules/amendments with superseding | **200 OK** |
+| `POST` | `/api/calculations/run` | Execute deterministic billing calculation | **200 OK** |
+| `GET` | `/api/calculations/case/{case_id}`| Retrieve all calculation runs for a case | **200 OK** |
+| `POST` | `/api/cases/{case_id}/investigations` | Run autonomous investigation (502 on failure, 503 if unconfigured) | **201 / 502 / 503** |
+| `GET` | `/api/cases/{case_id}/investigations` | List investigation runs for a case | **200 OK** |
+| `GET` | `/api/findings/case/{case_id}` | List structured findings and review history | **200 OK** |
+| `POST` | `/api/findings/{id}/review` | Submit human review (`ACCEPT`, `EDIT`, `REJECT`) | **200 OK** |
+| `GET` | `/api/credits/case/{case_id}/cap` | Read calculated credit cap and adjustments | **200 OK** |
+| `POST` | `/api/credits/approve` | Approve financial credit under lock and cap | **201 / 400 / 409** |
+| `GET` | `/api/credits/case/{case_id}` | List approved credits for a case | **200 OK** |
+| `GET` | `/api/llm/status` | List LLM provider configuration status | **200 OK** |
+| `GET` | `/healthz` | System health probe | **200 OK** |
 
 ---
 
-## ☁️ Deployment & Production Operations
+## ☁️ Deployment & Database Migrations
 
-- **Blueprint Configuration:** Documented in [`render.yaml`](render.yaml) for Render Web Service deployment running Python 3.12 and Node.js 20 under Uvicorn.
-- **Database Architecture & Migrations:**
-  - On startup, `create_all_tables()` automatically ensures all 14 tables and physical append-only database triggers exist on SQLite and PostgreSQL.
-  - Greenfield Alembic migrations (`alembic upgrade head`) are provided for standard CI/CD deployment pipelines.
-  - Dual-dialect append-only triggers: `BEFORE UPDATE OR DELETE ON case_events` aborts with `RAISE(ABORT)` in SQLite and a PL/pgSQL function in PostgreSQL.
-- **Auto-Seeding on Brand New Instances:**
-  - When the application starts with an empty database (0 cases), `lifespan()` in `main.py` automatically seeds the 3 foundational dispute scenarios (Acme Corp overcharge, Bravo Ltd contract ambiguity, Delta Cloud clean invoice).
-  - Manual re-seeding is always available via `python backend/seed_demo_data.py`.
-- **Active Model Pinning:**
-  - Gemini: `gemini-3.1-flash-lite` (supported through May 2027, replacing deprecated 2.0-flash).
-  - Groq fallback: `llama-3.3-70b-versatile`.
-  - OpenRouter fallback: `google/gemini-2.5-flash`.
-  - Provider verification CLI: run `python backend/scripts/check_llm.py` to test live connectivity across all configured providers.
-- **Authentication & Roles:**
-  - `DEMO_REVIEWER_TOKEN`: Bearer token for reviewer role (can trigger investigations, submit human reviews, and approve credits). Defaults to `demo-reviewer-token-2026` in local dev; required to be a custom secret in production.
-  - `DEMO_VIEWER_TOKEN`: Bearer token for read-only viewer role. Defaults to `demo-viewer-token-2026` in dev.
-  - `REVIEWER_TOKENS`: Optional multi-user comma-separated reviewer tokens with mapped identity (e.g. `"token_alice:alice@company.com,token_bob:bob@company.com"`).
-- **Cold-Start Advisory:**
-  - On Render's free tier, backend containers spin down after periods of inactivity. Please allow 30–45 seconds for initial instance wake-up on first request.
+- **Platform Blueprint:** Documented in [`render.yaml`](render.yaml) for Node 20 and Python 3.12.
+- **Alembic vs create_all:**
+  - `create_all_tables()` automatically initializes all 14 tables and append-only database triggers for fast local testing and greenfield SQLite setups.
+  - Alembic migrations (`alembic upgrade head`) manage sequential DDL evolutions (partial indexes, active flags, billing periods) in production and PostgreSQL environments.
+- **Multi-User Reviewer Tokens (`REVIEWER_TOKENS`):**
+  - Set `REVIEWER_TOKENS="token_alice:alice@domain.com,token_bob:bob@domain.com"` in `.env` to map specific bearer tokens to individual reviewer identities in the audit log.
 
 ---
 
-## 🧪 Test Suite & Verification (122 Passing Tests, 1 Skipped)
+## 🧪 Automated Test Suite (143 Passed, 1 Skipped)
 
-The test suite runs under `pytest`:
-
+Run the backend test suite:
 ```bash
-LLM_MODE=mock pytest -v
+cd backend && LLM_MODE=mock pytest -q
+```
+**Actual pytest output:**
+```
+================== 143 passed, 1 skipped, 1 warning in 9.43s ==================
 ```
 
-### Breakdown of Test Results (122 Passing Tests, 1 Skipped):
-- `test_billing_engine.py`: 67 tests (pure deterministic arithmetic, slabs, included units, rounding, commitments, exemptions, zero-usage missing telemetry guard, non-finite isolation)
-- `test_api_and_services.py`: 23 tests (case CRUD, evidence versioning, calculation API, human reviews, credit approval caps, idempotency, repeat-run 409 guard, non-finite payload validation)
-- `test_agent.py`: 12 tests (LangGraph workflow, gates, prompt injection defense, citation validation, consistency checks, rate whitelists)
-- `test_models_and_db.py`: 10 tests (schema, foreign keys, append-only triggers, unique constraints, check constraints)
-- `test_llm_resilience.py`: 9 tests (Gemini 429 quota fallback to Groq, 500 fallback to OpenRouter, 404 skips, invalid JSON fallback, response_format retry, secret isolation, HTTP 502 failure response, GET /api/llm/status)
-- `test_concurrency.py`: 2 tests (10 concurrent threads hammering credit approvals; 1 PostgreSQL live test skipped when running SQLite)
-
-- **Pricing & Calculation Logic (67 tests in [`backend/tests/test_billing_engine.py`](backend/tests/test_billing_engine.py)):**
-  - Boundary rounding (`ROUND_HALF_UP`, half-away-from-zero).
-  - Flat, per-unit, tiered graduated, and tiered volume calculations.
-  - Included units with overage rate application.
-  - Discounts and minimum spend commit floors applied to all interpretations.
-  - Detection of uncovered usage when volume/graduated exceed last bounded tier (`INSUFFICIENT_DATA`).
-  - Metered rules with 0 valid telemetry events returning `INSUFFICIENT_DATA` (preventing phantom 100% overcharges).
-  - Detection of multiple competing primary rules yielding `AMBIGUOUS` with 0 difference.
-  - Environment exemptions and zero-billing verification.
-  - Quarantine of negative usage quantities.
-  - Repeatability and determinism of cryptographic `result_id` anchors and `result_hash` covering all pricing inputs.
-- **Schema & Triggers (10 tests in [`backend/tests/test_models_and_db.py`](backend/tests/test_models_and_db.py)):**
-  - Table creation verification for all 14 models.
-  - Foreign key constraint rejection on SQLite.
-  - Dialect-aware append-only triggers blocking `UPDATE` and `DELETE` on `case_events`, `calculation_line_results`, `credits`, `finding_reviews`, `evidence_versions`, and preserving `findings.raw_ai_text`.
-  - Dialect-aware trigger generation for SQLite (`RAISE(ABORT)`) and PostgreSQL (`PL/pgSQL`).
-  - Credit positive amount `CheckConstraint` (`amount_cents > 0`).
-  - Unique constraint enforcement on `Credit.idempotency_key` and `EvidenceVersion(case_id, version_number)`.
-  - JSON serialization of contract tiers and exemption lists.
-- **FastAPI Backend & Services (23 tests in [`backend/tests/test_api_and_services.py`](backend/tests/test_api_and_services.py)):**
-  - Auth enforcement: Bearer token validation with `secrets.compare_digest`, 401 on missing/invalid token, 403 on viewer mutating actions.
-  - Startup security: Refuses to boot in production when default demo tokens are present or when `LLM_MODE=mock`.
-  - Path traversal defense: SPA catch-all verifies realpath containment against `frontend/dist`.
-  - State machine lifecycle transitions and 409 Conflict rejection on invalid paths.
-  - Evidence upload bumping version from 1 to 2, marking findings stale, and reopening resolved cases.
-  - Finding review workflows: `ACCEPT`, `EDIT` (with separate text), and `REJECT`.
-  - End-to-end calculation execution via API with line-item results.
-  - Credit approval: stale finding rejection (400), unreviewed finding rejection (400), line item mismatch rejection (400), ambiguous finding rejection (400), latest-review ordering (preventing ACCEPT-then-REJECT payment), idempotency 409 Conflict on repeat (preventing duplicate credit even when reason codes vary), and cumulative cap exhaustion (400).
-  - Adjustment & cap validation: `invoice_line_id` reference checks (422 on invalid, 201 on valid/case-wide), case-wide cap enforcement via latest calculation join without inflation.
-  - Investigation failure audit: FAILED runs return HTTP 502 Bad Gateway with status=FAILED and record `INVESTIGATION_RUN_FAILED` in audit events.
-  - Repeat-run guard: triggers HTTP 409 Conflict if an investigation run is already RUNNING for the target case.
-- **LangGraph Agentic Investigation (12 tests in [`backend/tests/test_agent.py`](backend/tests/test_agent.py)):**
-  - Autonomous multi-node graph: gather evidence, deterministic calculation, findings synthesis, resolution formulation.
-  - Injection defense with escaped `<untrusted_customer_dispute>` isolation tags and untrusted metadata wrapping.
-  - Pydantic schema validation (`LLMFindingPayload`), citation verification, and narrative financial amount consistency checks.
-  - Rate whitelisting preventing legitimate contractual rates (e.g. `$0.10/unit`) from being flagged as fabricated amounts.
-  - Fail-loud error handling: LLM transient failures yield `FAILED` status, logging `INVESTIGATION_RUN_FAILED` without producing fabricated mock findings.
-- **Concurrency Stress Test (2 tests in [`backend/tests/test_concurrency.py`](backend/tests/test_concurrency.py)):**
-  - Fires 10 concurrent threads simultaneously against a single overcharge line item.
-  - Proves that exactly 1 thread claims the credit, 9 competing threads are rejected, and total approved credits strictly equals the eligible overcharge (zero double-crediting).
-  - PostgreSQL `SELECT FOR UPDATE` verification configured via `POSTGRES_TEST_URL` (conditionally skipped pending live PG connection).
+### Per-File Test Function Count (`grep -c "def test_"`)
+| Test File | Count | Focus Area |
+| :--- | :--- | :--- |
+| `tests/test_billing_engine.py` | 67 | Pure deterministic math, slabs, rounding, commitments, exemptions |
+| `tests/test_agent.py` | 24 | LangGraph pipeline, citations, per-line findings, injection defense, TTL |
+| `tests/test_api_and_services.py`| 23 | CRUD, transitions, calculation API, reviews, credits, audit |
+| `tests/test_models_and_db.py` | 10 | Schema constraints, append-only triggers, unique constraints |
+| `tests/test_llm_resilience.py` | 10 | Provider fallback, 429 quota retries, fail-loud 502, secret hygiene |
+| `tests/test_task9.py` | 4 | Billing period quarantine, 503 provider check, review ordering |
+| `tests/test_credit_cap.py` | 3 | Credit cap endpoint, adjustment deductions, duplicate 409 |
+| `tests/test_seed.py` | 2 | Auto-seed idempotency, scenario verification, failure logging |
+| `tests/test_concurrency.py` | 2 | 10-thread concurrent credit approval stress test (1 skipped on SQLite) |
+| **Total Test Functions** | **145** | *(Pytest collected: 144 test items — 143 passed, 1 skipped)* |
 
 ---
 
-## 🚀 Quickstart & Local Setup
+## 🚀 Local Setup & Verification
 
-### 1. Clone & Enter Directory
-```bash
-git clone https://github.com/abhi-1289-9821/async-task.git
-cd async-task
-```
-
-### 2. Configure Environment
+### 1. Configure Environment
 ```bash
 cp .env.example .env
 ```
-Edit `.env` as needed:
-```ini
-DATABASE_URL=sqlite:///./billing_disputes.db
-ENVIRONMENT=development
-PORT=8000
-DEBUG=false
-DEMO_REVIEWER_TOKEN=your-reviewer-token-here
-DEMO_VIEWER_TOKEN=your-viewer-token-here
-GEMINI_API_KEY=your-gemini-api-key-here
-GEMINI_MODEL=gemini-2.0-flash
-LLM_MODE=real
-```
+Edit `.env` to configure your database URL and optional LLM keys.
 
-### 3. Setup Virtual Environment
+### 2. Backend Setup
 ```bash
 cd backend
 python -m venv .venv
 
-# On Windows:
+# Activate:
+# Windows:
 .venv\Scripts\activate
-# On Linux/macOS:
+# Linux/macOS:
 source .venv/bin/activate
 
 pip install -r requirements.txt
+alembic upgrade head
+python scripts/check_llm.py
 ```
 
-### 4. Run Test Suite
+### 3. Run Backend Tests
 ```bash
-pytest -v
+$env:LLM_MODE="mock"; pytest -q
 ```
 
-### 5. Launch Frontend UI
+### 4. Frontend Setup & Verification
 ```bash
 cd ../frontend
-npm install
+npm ci
+npm run lint
+npm run build
 npm run dev
-# Access UI at http://localhost:5173
 ```
-
----
-
-## 🗺️ Implementation Roadmap
-
-- [x] **Phase 0: Architecture & Risk Evaluation**
-- [x] **Phase 1: Deterministic Engine & Core Schema** (60 passing tests)
-- [x] **Phase 2: Database Layer, Audit Trail & State Transitions** (Schema constraints, triggers, immutability, concurrency locking)
-- [x] **Phase 3: Agentic Investigation (LangGraph + Gemini)** (86 passing tests, citation & injection defense)
-- [x] **Phase 4: Frontend Audit Workspace (React + Vite)** (Dark mode UI, scenario presets, interactive review)
-- [x] **Phase 5: End-to-End Scenarios & Demonstration Workflows** (99+ passing tests, live API & UI verification)
-
----
-
-## 📚 Documentation & Engineering Logs
-
-- **Engineering Audit Log:** [`docs/agent_log.md`](docs/agent_log.md) records all development decisions, dependency adjustments, and test corrections chronologically.
-- **Agent Usage Guide:** Available in [`AGENT_USAGE.md`](AGENT_USAGE.md) detailing architecture, prompt records, delegated work, agent mistakes, and verification methodology.
+Visit `http://localhost:5173` to access the FairBill workspace.

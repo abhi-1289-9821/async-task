@@ -49,5 +49,6 @@ class CalculationResponse(BaseModel):
     total_recalculated_cents: int
     total_difference_cents: int
     result_hash: str
+    quarantined_events: Optional[list[dict[str, Any]]] = None
     created_at: datetime
     line_results: list[CalculationLineResultResponse] = Field(default_factory=list)

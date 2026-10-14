@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     debug: bool = False
     app_version: str = "0.1.0"
     cors_origins: str = "http://localhost:5173"  # comma-separated for prod
+    investigation_run_ttl_seconds: int = 180
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":

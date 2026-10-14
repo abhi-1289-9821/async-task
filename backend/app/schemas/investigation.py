@@ -49,6 +49,7 @@ class FindingResponse(BaseModel):
     case_id: str
     run_id: str
     finding_type: str
+    narrative: Optional[str] = None
     raw_ai_text: Optional[str] = None
     calculation_line_result_id: Optional[int] = None
     verified_facts: Optional[list[Any]] = None
@@ -59,6 +60,7 @@ class FindingResponse(BaseModel):
     citation_ids: Optional[list[str]] = None
     citation_validation_passed: bool = False
     consistency_check_passed: bool = False
+    validation_notes: Optional[list[str]] = None
     is_stale: bool = False
     stale_reason: Optional[str] = None
     created_at: datetime

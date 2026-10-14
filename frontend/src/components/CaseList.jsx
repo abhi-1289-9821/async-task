@@ -2,14 +2,13 @@ import React, { useState } from 'react';
 import { 
   Plus, 
   Search, 
-  Filter, 
   ArrowUpRight, 
   DollarSign, 
   Clock, 
   CheckCircle2, 
-  Layers,
-  Sparkles
+  Layers
 } from 'lucide-react';
+import { formatCents } from '../utils/money';
 
 export default function CaseList({ cases, onSelectCase, onOpenCreateModal }) {
   const [searchTerm, setSearchTerm] = useState('');
@@ -188,7 +187,7 @@ export default function CaseList({ cases, onSelectCase, onOpenCreateModal }) {
                     {c.title}
                   </td>
                   <td className="font-mono" style={{ fontWeight: 700 }}>
-                    ${(c.disputed_amount_cents / 100).toFixed(2)}
+                    {formatCents(c.disputed_amount_cents)}
                   </td>
                   <td>
                     <span className="citation-pill">

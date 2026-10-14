@@ -42,6 +42,7 @@ def upgrade() -> None:
     sa.Column('total_recalculated_cents', sa.Integer(), nullable=False),
     sa.Column('total_difference_cents', sa.Integer(), nullable=False),
     sa.Column('result_hash', sa.String(length=64), nullable=False),
+    sa.Column('quarantined_events', sa.JSON(), nullable=True),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
     sa.ForeignKeyConstraint(['case_id'], ['cases.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
@@ -176,6 +177,7 @@ def upgrade() -> None:
     sa.Column('run_id', sa.String(length=36), nullable=False),
     sa.Column('case_id', sa.String(length=36), nullable=False),
     sa.Column('finding_type', sa.Enum('CONFIRMED_CALCULATION_DISCREPANCY', 'POSSIBLE_DISCREPANCY', 'CONTRACT_AMBIGUITY', 'INSUFFICIENT_EVIDENCE', 'NO_DISCREPANCY', 'UNRESOLVED', name='agent_finding_type_enum', create_constraint=True), nullable=False),
+    sa.Column('narrative', sa.Text(), nullable=True),
     sa.Column('raw_ai_text', sa.Text(), nullable=True),
     sa.Column('calculation_line_result_id', sa.Integer(), nullable=True),
     sa.Column('verified_facts', sa.JSON(), nullable=True),
@@ -186,6 +188,7 @@ def upgrade() -> None:
     sa.Column('citation_ids', sa.JSON(), nullable=True),
     sa.Column('citation_validation_passed', sa.Boolean(), nullable=False),
     sa.Column('consistency_check_passed', sa.Boolean(), nullable=False),
+    sa.Column('validation_notes', sa.JSON(), nullable=True),
     sa.Column('is_stale', sa.Boolean(), nullable=False),
     sa.Column('stale_reason', sa.Text(), nullable=True),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),

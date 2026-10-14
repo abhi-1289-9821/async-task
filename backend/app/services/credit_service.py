@@ -53,6 +53,88 @@ def generate_idempotency_key(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def compute_remaining_cap(
+    db: Session,
+    case_id: str,
+    invoice_line_id: str,
+    line_result,
+) -> dict:
+    """
+    Computes the remaining credit cap for an invoice line.
+    Returns a dict with keys:
+      eligible_cents, prior_credits_cents, line_adjustments_cents,
+      case_wide_adjustments_cents, remaining_cap_cents.
+
+    This function is used by BOTH approve_credit (for enforcement) and
+    the GET /cap endpoint (for display), ensuring the UI and the approval
+    gate always show the same number.
+    """
+    eligible_overcharge = abs(line_result.difference_cents)
+
+    prior_credits = int(
+        db.query(func.coalesce(func.sum(Credit.amount_cents), 0))
+        .filter(Credit.invoice_line_id == invoice_line_id)
+        .scalar()
+    )
+
+    line_adjustments = int(
+        db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
+        .filter(
+            Adjustment.case_id == case_id,
+            Adjustment.invoice_line_id == invoice_line_id,
+        )
+        .scalar()
+    )
+    line_cap = eligible_overcharge - prior_credits - line_adjustments
+
+    case_wide_adjustments = int(
+        db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
+        .filter(
+            Adjustment.case_id == case_id,
+            Adjustment.invoice_line_id.is_(None),
+        )
+        .scalar()
+    )
+
+    if case_wide_adjustments > 0:
+        all_case_credits = int(
+            db.query(func.coalesce(func.sum(Credit.amount_cents), 0))
+            .filter(Credit.case_id == case_id)
+            .scalar()
+        )
+        latest_calc = (
+            db.query(Calculation)
+            .filter(Calculation.case_id == case_id)
+            .order_by(Calculation.created_at.desc(), Calculation.id.desc())
+            .first()
+        )
+        calc_id = latest_calc.id if latest_calc else line_result.calculation_id
+        total_case_overcharge = int(
+            db.query(func.coalesce(func.sum(func.abs(CalculationLineResult.difference_cents)), 0))
+            .join(Calculation, Calculation.id == CalculationLineResult.calculation_id)
+            .filter(
+                Calculation.id == calc_id,
+                Calculation.case_id == case_id,
+                CalculationLineResult.difference_cents < 0,
+            )
+            .scalar()
+        )
+        case_cap = total_case_overcharge - all_case_credits - case_wide_adjustments
+        remaining_cap = min(line_cap, case_cap)
+    else:
+        remaining_cap = line_cap
+
+    return {
+        "eligible_cents": eligible_overcharge,
+        "prior_credits_cents": prior_credits,
+        "line_adjustments_cents": line_adjustments,
+        "case_wide_adjustments_cents": case_wide_adjustments,
+        "remaining_cap_cents": remaining_cap,
+    }
+
+
+
+
 def approve_credit(
     db: Session,
     case_id: str,
@@ -266,63 +348,13 @@ def approve_credit(
 
     eligible_overcharge = abs(line_result.difference_cents)
 
-    # Sum of prior approved credits for this line
-    prior_credits = (
-        db.query(func.coalesce(func.sum(Credit.amount_cents), 0))
-        .filter(Credit.invoice_line_id == invoice_line_id)
-        .scalar()
-    )
-
-    # 1. Prior adjustments specifically linked to this line
-    line_adjustments = (
-        db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
-        .filter(
-            Adjustment.case_id == case_id,
-            Adjustment.invoice_line_id == invoice_line_id,
-        )
-        .scalar()
-    )
-    line_cap = eligible_overcharge - prior_credits - line_adjustments
-
-    # 2. Case-wide adjustments (unlinked to any line): apply globally once across the dispute
-    case_wide_adjustments = (
-        db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
-        .filter(
-            Adjustment.case_id == case_id,
-            Adjustment.invoice_line_id.is_(None),
-        )
-        .scalar()
-    )
-
-    if case_wide_adjustments > 0:
-        all_case_credits = (
-            db.query(func.coalesce(func.sum(Credit.amount_cents), 0))
-            .filter(Credit.case_id == case_id)
-            .scalar()
-        )
-        # Total case overcharge from the latest calculation for this case
-        # Join through Calculation to filter by case_id and prevent multiple calculation inflation
-        latest_calc = (
-            db.query(Calculation)
-            .filter(Calculation.case_id == case_id)
-            .order_by(Calculation.created_at.desc(), Calculation.id.desc())
-            .first()
-        )
-        calc_id = latest_calc.id if latest_calc else line_result.calculation_id
-        total_case_overcharge = (
-            db.query(func.coalesce(func.sum(func.abs(CalculationLineResult.difference_cents)), 0))
-            .join(Calculation, Calculation.id == CalculationLineResult.calculation_id)
-            .filter(
-                Calculation.id == calc_id,
-                Calculation.case_id == case_id,
-                CalculationLineResult.difference_cents < 0,
-            )
-            .scalar()
-        )
-        case_cap = total_case_overcharge - all_case_credits - case_wide_adjustments
-        remaining_cap = min(line_cap, case_cap)
-    else:
-        remaining_cap = line_cap
+    # Use shared helper — same logic as GET /cap endpoint
+    cap_info = compute_remaining_cap(db, case_id, invoice_line_id, line_result)
+    remaining_cap = cap_info["remaining_cap_cents"]
+    eligible_overcharge = cap_info["eligible_cents"]
+    prior_credits = cap_info["prior_credits_cents"]
+    line_adjustments = cap_info["line_adjustments_cents"]
+    case_wide_adjustments = cap_info["case_wide_adjustments_cents"]
 
     if remaining_cap <= 0:
         raise HTTPException(

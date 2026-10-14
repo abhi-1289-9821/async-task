@@ -51,6 +51,7 @@ class ContractRuleCreate(BaseModel):
     included_units: int = Field(0, ge=0)
     overage_rate_cents: Optional[int] = Field(None, ge=0)
     exempt_environments: Optional[list[str]] = None
+    supersedes_rule_id: Optional[str] = Field(None, max_length=36)
 
     @model_validator(mode="after")
     def validate_tiers_structure(self) -> "ContractRuleCreate":
@@ -88,6 +89,8 @@ class CaseCreate(BaseModel):
     customer_name: str = Field(..., min_length=1, max_length=100)
     disputed_amount_cents: int = Field(..., ge=0)
     dispute_description: Optional[str] = Field(None, max_length=5000)
+    period_start: Optional[datetime] = None
+    period_end: Optional[datetime] = None
     invoice_lines: list[InvoiceLineCreate] = Field(default_factory=list)
     contract_rules: list[ContractRuleCreate] = Field(default_factory=list)
     adjustments: list[AdjustmentCreate] = Field(default_factory=list)
@@ -149,6 +152,8 @@ class ContractRuleResponse(BaseModel):
     included_units: int
     overage_rate_cents: Optional[int] = None
     exempt_environments: Optional[list[str]] = None
+    is_active: bool = True
+    supersedes_rule_id: Optional[str] = None
     created_at: datetime
 
 
@@ -172,6 +177,8 @@ class CaseResponse(BaseModel):
     customer_name: str
     disputed_amount_cents: int
     dispute_description: Optional[str] = None
+    period_start: Optional[datetime] = None
+    period_end: Optional[datetime] = None
     status: CaseStatus
     evidence_version: int
     created_at: datetime

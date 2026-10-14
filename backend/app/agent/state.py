@@ -47,6 +47,12 @@ class AgentState(TypedDict, total=False):
     validated_findings: list[dict[str, Any]]
     validated_options: list[dict[str, Any]]
 
+    # Quarantined events from the calculation engine (dropped events with reasons)
+    quarantined_events: list[dict[str, Any]]
+
+    # True when LLM analysis fell back to a deterministic mock (marks run as PARTIAL)
+    llm_fallback: bool
+
     # Telemetry
     token_usage: dict[str, int]
     errors: list[str]

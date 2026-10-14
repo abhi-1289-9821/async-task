@@ -36,10 +36,12 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -80,6 +82,16 @@ class ReviewDecision(str, enum.Enum):
 
 class InvestigationRun(Base):
     __tablename__ = "investigation_runs"
+    __table_args__ = (
+        Index(
+            "ix_one_running_investigation_per_case",
+            "case_id",
+            unique=True,
+            postgresql_where=text("status = 'RUNNING'"),
+            sqlite_where=text("status = 'RUNNING'"),
+        ),
+    )
+
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     case_id: Mapped[str] = mapped_column(
@@ -125,6 +137,7 @@ class Finding(Base):
     finding_type: Mapped[str] = mapped_column(
         Enum(AgentFindingType, name="agent_finding_type_enum", create_constraint=True), nullable=False
     )
+    narrative: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     raw_ai_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     calculation_line_result_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("calculation_line_results.id", ondelete="SET NULL"), nullable=True
@@ -138,6 +151,7 @@ class Finding(Base):
     citation_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # evidence/result IDs cited
     citation_validation_passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     consistency_check_passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    validation_notes: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     # Staleness tracking
     is_stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -149,7 +163,7 @@ class Finding(Base):
     reviews: Mapped[list["FindingReview"]] = relationship(
         back_populates="finding",
         cascade="all, delete-orphan",
-        order_by="FindingReview.created_at.desc()",
+        order_by="FindingReview.created_at.desc(), FindingReview.id.desc()",
     )
 
 

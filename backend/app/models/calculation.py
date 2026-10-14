@@ -69,6 +69,7 @@ class Calculation(Base):
     total_recalculated_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     total_difference_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    quarantined_events: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     case: Mapped["Case"] = relationship(back_populates="calculations")  # noqa: F821

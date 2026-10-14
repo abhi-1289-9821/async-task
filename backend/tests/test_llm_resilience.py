@@ -201,6 +201,7 @@ class TestLLMProviderFallback:
         make_test_case(client)
 
         monkeypatch.setattr(settings, "llm_mode", "real")
+        monkeypatch.setattr(settings, "allow_mock_fallback", False)
         monkeypatch.setattr(settings, "llm_providers", "gemini,groq")
         monkeypatch.setattr(settings, "gemini_api_key", "test-gemini-key")
         monkeypatch.setattr(settings, "gemini_model", "gemini-3.1-flash-lite")
@@ -427,6 +428,7 @@ class TestLLMProviderFallback:
         secret_or = "sk-or-v1-superSecretOpenRouterKey998877"
 
         monkeypatch.setattr(settings, "llm_mode", "real")
+        monkeypatch.setattr(settings, "allow_mock_fallback", False)
         monkeypatch.setattr(settings, "llm_providers", "gemini,groq,openrouter")
         monkeypatch.setattr(settings, "gemini_api_key", secret_gemini)
         monkeypatch.setattr(settings, "gemini_model", "gemini-3.1-flash-lite")

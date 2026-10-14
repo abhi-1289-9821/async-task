@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Eye, ShieldCheck, Activity, Key, AlertCircle, X, Trash2, Sun, Moon } from 'lucide-react';
-import { getActiveRole, setActiveRole, checkHealth, getToken, setCustomToken, hasActiveToken, hasUserSavedToken } from '../api/client';
+import { getActiveRole, setActiveRole, checkHealth, getToken, setCustomToken, hasActiveToken } from '../api/client';
 
 export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
   const [role, setRole] = useState(getActiveRole());

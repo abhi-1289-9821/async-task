@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # ── AI / LLM Providers ───────────────────────────────────────────────────
     llm_providers: str = "gemini,groq,openrouter"  # ordered, comma-separated fallback list
     llm_mode: str = "real"                        # "mock" for automated tests; "real" for live investigations
+    allow_mock_fallback: bool = True
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.1-flash-lite"

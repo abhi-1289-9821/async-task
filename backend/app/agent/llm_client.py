@@ -480,9 +480,25 @@ def generate_investigation_findings(
         parsed = json.loads(cleaned)
         parsed["generation_path"] = "llm"
         return parsed, tokens
-    except AllProvidersFailedError:
-        raise
-    except Exception as e:
+    except (AllProvidersFailedError, Exception) as e:
+        if settings.allow_mock_fallback:
+            logger.warning(
+                "Live LLM findings call failed (%s); engaging graceful fallback_mock to preserve deterministic calculations.",
+                sanitize_error_message(str(e)),
+            )
+            data = _mock_analysis(prompt, state, target_lr=target_lr)
+            data["generation_path"] = "fallback_mock"
+            tokens = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "provider": "fallback_mock",
+                "model": "deterministic-reference",
+                "attempts": getattr(e, "attempts", []),
+            }
+            return data, tokens
+        if isinstance(e, AllProvidersFailedError):
+            raise
         logger.error("Error in real LLM findings call: %s", sanitize_error_message(str(e)))
         raise AllProvidersFailedError(
             f"Live LLM call failed: {sanitize_error_message(str(e))}; refusing to fake AI analysis",
@@ -523,10 +539,31 @@ def generate_resolution_options(
             parsed = parsed["options"]
         if not isinstance(parsed, list):
             parsed = [parsed]
+        for opt in parsed:
+            if isinstance(opt, dict):
+                opt["generation_path"] = "llm"
         return parsed, tokens
-    except AllProvidersFailedError:
-        raise
-    except Exception as e:
+    except (AllProvidersFailedError, Exception) as e:
+        if settings.allow_mock_fallback:
+            logger.warning(
+                "Live LLM options call failed (%s); engaging graceful fallback_mock to preserve deterministic resolution options.",
+                sanitize_error_message(str(e)),
+            )
+            options = _mock_options(prompt, finding, state)
+            for opt in options:
+                if isinstance(opt, dict):
+                    opt["generation_path"] = "fallback_mock"
+            tokens = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "provider": "fallback_mock",
+                "model": "deterministic-reference",
+                "attempts": getattr(e, "attempts", []),
+            }
+            return options, tokens
+        if isinstance(e, AllProvidersFailedError):
+            raise
         logger.error("Error in real LLM options call: %s", sanitize_error_message(str(e)))
         raise AllProvidersFailedError(
             f"Live LLM options call failed: {sanitize_error_message(str(e))}; refusing to fake AI options",

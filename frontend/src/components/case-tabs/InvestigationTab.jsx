@@ -15,6 +15,7 @@ export default function InvestigationTab({
   setSelectedLineId,
   setCreditAmountDollars,
   setActiveTab,
+  onRequestInfo,
 }) {
   const renderFindingCard = (f, isActive = true) => {
     const matchingLr = calculation?.line_results?.find((lr) => (f.invoice_line_id && lr.line_id === f.invoice_line_id) || (f.calculation_line_result_id && lr.id === f.calculation_line_result_id));
@@ -191,10 +192,23 @@ export default function InvestigationTab({
 
         {/* Facet 5: Missing Evidence Questions */}
         {f.missing_evidence_questions && f.missing_evidence_questions.length > 0 && (
-          <div style={{ marginBottom: '0.85rem', padding: '0.65rem 0.85rem', background: 'var(--status-rust-bg)', border: '1px solid var(--status-rust-border)', borderRadius: 'var(--radius-xs)' }}>
-            <div style={{ fontSize: '0.72rem', color: 'var(--status-rust)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-              <ShieldAlert size={13} />
-              <span>Missing Evidence Required for Verification</span>
+          <div style={{ marginBottom: '0.85rem', padding: '0.75rem 0.95rem', background: 'var(--status-rust-bg)', border: '1px solid var(--status-rust-border)', borderRadius: 'var(--radius-xs)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div style={{ fontSize: '0.72rem', color: 'var(--status-rust)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                <ShieldAlert size={13} />
+                <span>Missing Evidence Required for Verification</span>
+              </div>
+              {onRequestInfo && (
+                <button
+                  type="button"
+                  className="btn btn-amber btn-sm"
+                  style={{ fontSize: '0.72rem', padding: '0.2rem 0.5rem' }}
+                  onClick={onRequestInfo}
+                  data-testid="request-from-customer-facet-btn"
+                >
+                  Request from Customer
+                </button>
+              )}
             </div>
             <ul style={{ paddingLeft: '1.25rem', fontSize: '0.82rem', color: 'var(--ink)', margin: 0 }}>
               {f.missing_evidence_questions.map((me, idx) => (
@@ -363,6 +377,147 @@ export default function InvestigationTab({
 
         {findings.length > 0 ? (
           <>
+            {(() => {
+              const activeFindingsList = findings.filter((f) => !f.is_stale);
+              const confirmedCount = activeFindingsList.filter((f) => f.finding_type === 'CONFIRMED_CALCULATION_DISCREPANCY').length;
+              const ambiguityCount = activeFindingsList.filter((f) => f.finding_type === 'AMBIGUITY_DETECTED').length;
+              const gapCount = activeFindingsList.filter(
+                (f) => f.finding_type === 'EVIDENCE_GAP' || (f.missing_evidence_questions && f.missing_evidence_questions.length > 0)
+              ).length;
+
+              const lineResults = calculation?.line_results || [];
+              let totalBilled = 0;
+              let totalOvercharge = 0;
+              let totalUndisputed = 0;
+
+              lineResults.forEach((lr) => {
+                totalBilled += (lr.original_amount_cents || 0);
+                if (lr.difference_cents != null && lr.difference_cents < 0) {
+                  totalOvercharge += Math.abs(lr.difference_cents);
+                }
+                if (lr.undisputed_overcharge_cents != null && lr.undisputed_overcharge_cents > 0) {
+                  totalUndisputed += lr.undisputed_overcharge_cents;
+                }
+              });
+
+              const effectiveCap = totalOvercharge > 0 ? totalOvercharge : totalUndisputed;
+
+              const allQuestions = [];
+              activeFindingsList.forEach((f) => {
+                if (Array.isArray(f.missing_evidence_questions)) allQuestions.push(...f.missing_evidence_questions);
+                if (Array.isArray(f.open_questions)) allQuestions.push(...f.open_questions);
+              });
+
+              return (
+                <div
+                  className="card"
+                  data-testid="case-investigation-summary"
+                  style={{
+                    background: 'var(--surface-subtle)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '1.5rem',
+                    marginBottom: '2rem',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.15rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                    <div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--accent)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.2rem' }}>
+                        Executive Synthesis
+                      </div>
+                      <h4 style={{ margin: 0, fontSize: '1.2rem', color: 'var(--ink)' }}>
+                        Case Investigation Summary & Root-Cause Analysis
+                      </h4>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      {confirmedCount > 0 && (
+                        <span className="badge badge-resolved">
+                          {confirmedCount} Confirmed Discrepanc{confirmedCount === 1 ? 'y' : 'ies'}
+                        </span>
+                      )}
+                      {ambiguityCount > 0 && (
+                        <span className="badge badge-awaiting">
+                          {ambiguityCount} Ambiguous Option{ambiguityCount === 1 ? '' : 's'}
+                        </span>
+                      )}
+                      {gapCount > 0 && (
+                        <span className="badge badge-stale">
+                          {gapCount} Evidence Gap{gapCount === 1 ? '' : 's'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Financial & Status Metrics */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.85rem', marginBottom: '1.25rem' }}>
+                    <div style={{ background: 'var(--surface)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)' }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase' }}>Original Billed</div>
+                      <div className="font-mono" style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--ink)' }}>
+                        ${(totalBilled / 100).toFixed(2)}
+                      </div>
+                    </div>
+                    <div style={{ background: 'var(--surface)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)' }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase' }}>Allowable Recovery Cap</div>
+                      <div className="font-mono" style={{ fontSize: '1.15rem', fontWeight: 700, color: effectiveCap > 0 ? 'var(--status-rust)' : 'var(--ink)' }}>
+                        ${(effectiveCap / 100).toFixed(2)}
+                      </div>
+                      {totalUndisputed > 0 && totalOvercharge === 0 && (
+                        <div style={{ fontSize: '0.68rem', color: 'var(--ink-muted)', marginTop: '2px' }}>Undisputed portion of ambiguous lines</div>
+                      )}
+                    </div>
+                    <div style={{ background: 'var(--surface)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)' }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase' }}>Active Findings</div>
+                      <div className="font-mono" style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--ink)' }}>
+                        {activeFindingsList.length} / {findings.length}
+                      </div>
+                    </div>
+                    <div style={{ background: 'var(--surface)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)' }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase' }}>Evidence Status</div>
+                      <div style={{ fontSize: '0.92rem', fontWeight: 600, color: allQuestions.length > 0 ? 'var(--status-amber)' : 'var(--status-green)', marginTop: '3px' }}>
+                        {allQuestions.length > 0 ? `${allQuestions.length} Missing Items` : '✓ Complete'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Root Cause Synthesis Paragraph */}
+                  <div style={{ background: 'var(--surface)', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)', marginBottom: allQuestions.length > 0 ? '1rem' : 0 }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--ink)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Root-Cause Synthesis & Operator Directive
+                    </div>
+                    <p style={{ fontSize: '0.86rem', lineHeight: 1.6, color: 'var(--ink-secondary)', margin: 0 }}>
+                      {confirmedCount > 0 && ambiguityCount === 0 && gapCount === 0 &&
+                        'Deterministic billing engine calculation confirmed a rate/tier overcharge against verified usage telemetry. Findings are actionable for credit issuance up to the remaining allowable cap in the Credits tab.'}
+                      {ambiguityCount > 0 &&
+                        'Contractual pricing ambiguity detected across valid interpretations. The deterministic engine has verified and reserved the undisputed portion. Select a resolution option below or review findings to finalize approval.'}
+                      {gapCount > 0 &&
+                        'Telemetry logs or contractual rules are missing or unverified. Financial credits cannot be calculated or approved from customer dispute assertions alone. Operator should request clarifying telemetry using the action below.'}
+                      {confirmedCount === 0 && ambiguityCount === 0 && gapCount === 0 &&
+                        'All invoice line items match contractual pricing and telemetry. No calculation discrepancy or unauthorized billing was identified.'}
+                    </p>
+                  </div>
+
+                  {/* Missing Evidence Questions Action Banner */}
+                  {allQuestions.length > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--status-rust-bg)', border: '1px solid var(--status-rust-border)', borderRadius: 'var(--radius-sm)', padding: '0.75rem 1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                      <div style={{ fontSize: '0.82rem', color: 'var(--status-rust)', fontWeight: 600 }}>
+                        Missing telemetry or evidence items flagged by AI investigation ({allQuestions.length} questions).
+                      </div>
+                      {onRequestInfo && (
+                        <button
+                          type="button"
+                          className="btn btn-amber btn-sm"
+                          onClick={onRequestInfo}
+                          data-testid="request-missing-evidence-btn"
+                        >
+                          Request Missing Evidence from Customer
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {(() => {
               const groups = {};
               findings.forEach((f) => {

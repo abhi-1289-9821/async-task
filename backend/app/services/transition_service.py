@@ -23,6 +23,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import HTTPException, status
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -212,8 +213,8 @@ def add_evidence_and_bump_version(
         locked_case = db.query(Case).filter(Case.id == case.id).with_for_update().first()
         if locked_case:
             case = locked_case
-    except Exception:
-        pass
+    except (OperationalError, SQLAlchemyError) as exc:
+        logger.debug("Row locking not supported or skipped: %s", exc)
 
     old_status = case.status
     case.evidence_version += 1
@@ -366,8 +367,8 @@ def add_rules_and_amendments_evidence(
         locked_case = db.query(Case).filter(Case.id == case.id).with_for_update().first()
         if locked_case:
             case = locked_case
-    except Exception:
-        pass
+    except (OperationalError, SQLAlchemyError) as exc:
+        logger.debug("Row locking not supported or skipped: %s", exc)
 
     old_status = case.status
     case.evidence_version += 1

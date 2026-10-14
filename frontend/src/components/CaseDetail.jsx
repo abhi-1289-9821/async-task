@@ -58,6 +58,10 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
   const [reviewNote, setReviewNote] = useState('Verified against contract terms');
   const [editedText, setEditedText] = useState('');
 
+  // Request Information Modal State
+  const [requestInfoModalOpen, setRequestInfoModalOpen] = useState(false);
+  const [requestInfoNote, setRequestInfoNote] = useState('');
+
   // Credit Approval State
   const [selectedLineId, setSelectedLineId] = useState('');
   const [creditAmountDollars, setCreditAmountDollars] = useState('');
@@ -149,15 +153,63 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
   }, [caseId, selectedLineId, credits.length]);
 
   // Transition status handler
-  const handleTransition = async (targetStatus) => {
+  const handleTransition = async (targetStatus, customNote) => {
     if (!isReviewer) {
       onToast('error', 'HTTP 403 Forbidden: Only REVIEWER role can transition case status');
       return;
     }
     try {
       setActionLoading(true);
-      await transitionCase(caseId, targetStatus, `Manual transition to ${targetStatus}`);
+      await transitionCase(caseId, targetStatus, customNote || `Manual transition to ${targetStatus}`);
       onToast('success', `Case status updated to ${targetStatus}`);
+      await loadAllCaseData();
+    } catch (err) {
+      onToast('error', err.message || 'Transition rejected');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Request Info Modal Handlers
+  const handleOpenRequestInfo = () => {
+    if (!isReviewer) {
+      onToast('error', 'HTTP 403 Forbidden: Only REVIEWER role can request information');
+      return;
+    }
+    const questions = [];
+    findings.forEach((f) => {
+      if (Array.isArray(f.missing_evidence_questions)) {
+        questions.push(...f.missing_evidence_questions);
+      }
+      if (Array.isArray(f.open_questions)) {
+        questions.push(...f.open_questions);
+      }
+    });
+
+    if (questions.length > 0) {
+      setRequestInfoNote(
+        `Requesting customer / internal telemetry clarifications:\n\n${questions
+          .map((q, i) => `${i + 1}. ${typeof q === 'string' ? q : JSON.stringify(q)}`)
+          .join('\n')}`
+      );
+    } else {
+      setRequestInfoNote(
+        `Please provide verified production telemetry logs and contractual documentation for billing period ${caseData?.billing_period_start || ''} to ${caseData?.billing_period_end || ''}.`
+      );
+    }
+    setRequestInfoModalOpen(true);
+  };
+
+  const handleSubmitRequestInfo = async () => {
+    if (!isReviewer) {
+      onToast('error', 'HTTP 403 Forbidden: Only REVIEWER role can request information');
+      return;
+    }
+    try {
+      setActionLoading(true);
+      await transitionCase(caseId, 'AWAITING_INFO', requestInfoNote);
+      onToast('success', 'Case transitioned to AWAITING_INFO with evidence questions recorded');
+      setRequestInfoModalOpen(false);
       await loadAllCaseData();
     } catch (err) {
       onToast('error', err.message || 'Transition rejected');
@@ -331,8 +383,9 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
             <button
               type="button"
               className="btn btn-amber btn-sm"
-              onClick={() => handleTransition('AWAITING_INFO')}
+              onClick={handleOpenRequestInfo}
               disabled={actionLoading}
+              data-testid="request-info-btn"
             >
               Request Info
             </button>
@@ -546,6 +599,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
           setSelectedLineId={setSelectedLineId}
           setCreditAmountDollars={setCreditAmountDollars}
           setActiveTab={setActiveTab}
+          onRequestInfo={handleOpenRequestInfo}
         />
       )}
 
@@ -658,8 +712,9 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
 
               {reviewAction === 'EDIT' && (
                 <div className="form-group">
-                  <label className="form-label">Human Edited Text (Stored separately from AI text)</label>
+                  <label className="form-label" htmlFor="review-edited-text">Human Edited Text (Stored separately from AI text)</label>
                   <textarea
+                    id="review-edited-text"
                     className="form-textarea"
                     rows={4}
                     value={editedText}
@@ -670,8 +725,9 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
               )}
 
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label className="form-label">Reviewer Note / Justification</label>
+                <label className="form-label" htmlFor="reviewer-note-input">Reviewer Note / Justification</label>
                 <input
+                  id="reviewer-note-input"
                   type="text"
                   className="form-input"
                   value={reviewNote}
@@ -686,6 +742,73 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
               </button>
               <button type="button" className="btn btn-primary" onClick={handleSubmitReview} disabled={actionLoading}>
                 Submit Review
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Request Information Modal */}
+      {requestInfoModalOpen && typeof document !== 'undefined' && createPortal(
+        <div
+          className="modal-overlay"
+          onClick={() => setRequestInfoModalOpen(false)}
+          onKeyDown={(e) => { if (e.key === 'Escape') setRequestInfoModalOpen(false); }}
+        >
+          <div
+            className="modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="request-info-modal-title"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: 580 }}
+          >
+            <div className="modal-header">
+              <h3 id="request-info-modal-title" className="modal-title">Request Additional Information</h3>
+              <button
+                type="button"
+                onClick={() => setRequestInfoModalOpen(false)}
+                className="btn btn-secondary btn-sm"
+                aria-label="Close dialog"
+                style={{ borderRadius: '50%', width: 30, height: 30, padding: 0 }}
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <p style={{ fontSize: '0.85rem', color: 'var(--ink-secondary)', marginBottom: '1.25rem', lineHeight: 1.5 }}>
+                Transition case to <strong>AWAITING_INFO</strong> and record missing telemetry or contract questions into the immutable audit trail.
+              </p>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label className="form-label" htmlFor="request-info-textarea-input">Questions & Required Information</label>
+                <textarea
+                  id="request-info-textarea-input"
+                  className="form-textarea"
+                  rows={6}
+                  value={requestInfoNote}
+                  onChange={(e) => setRequestInfoNote(e.target.value)}
+                  placeholder="Detail the specific telemetry logs or contract amendments required..."
+                  data-testid="request-info-textarea"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button type="button" className="btn btn-secondary" onClick={() => setRequestInfoModalOpen(false)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-amber"
+                onClick={handleSubmitRequestInfo}
+                disabled={actionLoading || !requestInfoNote.trim()}
+                data-testid="submit-request-info-btn"
+              >
+                Submit Request (Awaiting Info)
               </button>
             </div>
           </div>

@@ -270,10 +270,12 @@ def _partition_events(
       - quarantined:     fail validation
 
     Malformed events are quarantined; calculation continues with the rest.
+    Environment comparisons are case-insensitive and trimmed of whitespace.
     """
     billable: list[UsageEvent] = []
     exempt: list[UsageEvent] = []
     quarantined: list[QuarantinedEvent] = []
+    norm_exempt = {e.strip().lower() for e in (exempt_environments or []) if isinstance(e, str)}
 
     for ev in events:
         reason = _validate_event(ev)
@@ -286,7 +288,8 @@ def _partition_events(
             continue
         if ev.line_id != line_id:
             continue
-        if ev.environment in exempt_environments:
+        ev_env = ev.environment.strip().lower() if isinstance(ev.environment, str) else ""
+        if ev_env in norm_exempt:
             exempt.append(ev)
         else:
             billable.append(ev)
@@ -520,8 +523,13 @@ def calculate_line(
                 return _make_insufficient_data_result(
                     line, r.rule_id, "Tiered rule has empty or missing tiers", quarantined_all
                 )
+            seen_unbounded = False
             prev_bound = Decimal("0")
-            for t in r.tiers:
+            for idx, t in enumerate(r.tiers):
+                if seen_unbounded:
+                    return _make_insufficient_data_result(
+                        line, r.rule_id, f"Invalid tier configuration: unbounded tier (up_to=None) at index {idx-1} cannot precede subsequent bounded tier", quarantined_all
+                    )
                 if t.price_per_unit_cents < 0:
                     return _make_insufficient_data_result(
                         line, r.rule_id, f"Negative tier rate {t.price_per_unit_cents}", quarantined_all
@@ -533,6 +541,8 @@ def calculate_line(
                             line, r.rule_id, f"Tiers must have strictly increasing finite upper bounds ({bound} <= {prev_bound})", quarantined_all
                         )
                     prev_bound = bound
+                else:
+                    seen_unbounded = True
 
     # ── 5. Guard: multiple primary rules → AMBIGUOUS with scenario interpretations ──
     if len(primary_rules) > 1:
@@ -675,8 +685,8 @@ def calculate_line(
             line_id=line.line_id,
             rule_id=primary_rules[0].rule_id,
             original_amount_cents=line.original_amount_cents,
-            recalculated_amount_cents=0,
-            difference_cents=0,
+            recalculated_amount_cents=None,
+            difference_cents=None,
             finding_type=FindingType.AMBIGUOUS,
             quantity_used=max_quantity,
             exempt_quantity=max_exempt,
@@ -904,6 +914,16 @@ def _make_insufficient_data_result(
     )
 
 
+def _normalize_datetime(dt: datetime | None) -> datetime | None:
+    """Normalizes naive and timezone-aware datetimes to UTC-naive for safe, deterministic comparison."""
+    if dt is None:
+        return None
+    if getattr(dt, "tzinfo", None) is not None:
+        from datetime import timezone
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def run_calculation(
     lines: list[InvoiceLine],
     rules: list[ContractRule],
@@ -960,9 +980,13 @@ def run_calculation(
             ))
             continue
 
+        norm_start = _normalize_datetime(period_start)
+        norm_end = _normalize_datetime(period_end)
+
         if ev.timestamp is not None:
-            if (period_start is not None and ev.timestamp < period_start) or (
-                period_end is not None and ev.timestamp > period_end
+            norm_ev_ts = _normalize_datetime(ev.timestamp)
+            if (norm_start is not None and norm_ev_ts < norm_start) or (
+                norm_end is not None and norm_ev_ts > norm_end
             ):
                 all_quarantined.append(QuarantinedEvent(
                     event_id=ev.event_id,
@@ -1001,7 +1025,7 @@ def run_calculation(
     # Total difference is the sum of line differences; if any line is INSUFFICIENT_DATA,
     # total recalculated is uncomputed / None rather than phantom $0.
     total_original = sum(r.original_amount_cents for r in line_results)
-    if any_insufficient:
+    if any_insufficient or any_ambiguous:
         total_difference = None
         total_recalculated = None
     else:

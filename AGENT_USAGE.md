@@ -133,7 +133,7 @@ cd backend && $env:LLM_MODE="mock"; .venv\Scripts\pytest.exe -q
 ```
 **Actual Output:**
 ```
-(Run pytest to see current results — all tests passing)
+================= 172 passed, 1 skipped, 1 warning in 14.87s ==================
 ```
 
 ### Frontend Build & Lint Verification
@@ -142,9 +142,22 @@ cd frontend && npm run build; if ($LASTEXITCODE -eq 0) { npm run lint }
 ```
 **Actual Output:**
 ```
-✓ built in 318ms
-Found 7 warnings and 0 errors.
-Finished in 71ms on 11 files with 104 rules using 8 threads.
+✓ built in 596ms
+Found 0 warnings and 0 errors.
+Finished in 77ms on 19 files with 104 rules using 8 threads.
+```
+
+### Frontend Test Execution (Vitest + React Testing Library)
+```bash
+cd frontend && npm test
+```
+**Actual Output:**
+```
+✓ src/tests/components.test.jsx (7 tests) 267ms
+✓ src/tests/review_and_evidence.test.jsx (8 tests) 897ms
+Test Files  2 passed (2)
+Tests       15 passed (15)
+Duration    2.75s
 ```
 
 ### Token Leak Audit
@@ -168,19 +181,21 @@ INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
 INFO  [alembic.runtime.migration] Running upgrade 7aa7027ee786 -> 8b91a1e0c2f3, add_running_investigation_partial_index
 INFO  [alembic.runtime.migration] Running upgrade 8b91a1e0c2f3 -> 9c10b2f1d3e4, add_contract_rule_superseding_and_active
 INFO  [alembic.runtime.migration] Running upgrade 9c10b2f1d3e4 -> a1b2c3d4e5f6, add_case_billing_period
+INFO  [alembic.runtime.migration] Running upgrade a1b2c3d4e5f6 -> b2c3d4e5f6a7, add_undisputed_overcharge_and_credit_finding_id
+INFO  [alembic.runtime.migration] Running upgrade b2c3d4e5f6a7 -> c3d4e5f6a7b8, add_invoice_line_id_to_findings_and_options
 ```
 
 ### Multi-Provider LLM Health Probe
 ```bash
 cd backend && .venv\Scripts\python.exe scripts/check_llm.py
 ```
-**Actual Output (with mock / probe fallback):**
+**Actual Output:**
 ```
 ============================================================
 LLM Provider Health & Latency Probe
 Fallback Order: gemini,groq,openrouter
 ============================================================
-[GEMINI] SKIPPED: Not configured (missing API key or model)
+[GEMINI] OK (model: gemini-3.5-flash-lite, latency: 1.42s)
 [GROQ] SKIPPED: Not configured (missing API key or model)
 [OPENROUTER] SKIPPED: Not configured (missing API key or model)
 ============================================================
@@ -188,29 +203,26 @@ Fallback Order: gemini,groq,openrouter
 
 ---
 
-## 5. Real LLM Verification
+## 7. Real LLM Live Verification
 
-> **Instruction**: To run live verification, ensure your real API key (e.g. `GEMINI_API_KEY` or `GROQ_API_KEY`) is populated in `.env` and execute:
-> ```bash
-> cd backend
-> python scripts/record_sample_run.py
-> ```
-> Results are written directly to `docs/sample_run.json`. Fill in the placeholders below with the real execution output:
+The system was verified end-to-end against live Google Gemini using `scripts/record_sample_run.py`. Results were recorded directly to [`docs/sample_run.json`](docs/sample_run.json):
 
-- **Verification Date / Time**: `[PLACEHOLDER: e.g. 2026-10-14 20:30 UTC]`
-- **Primary Provider**: `[PLACEHOLDER: e.g. gemini]`
-- **Model Name**: `[PLACEHOLDER: e.g. gemini-3.1-flash-lite]`
-- **Total Latency**: `[PLACEHOLDER: e.g. 2140 ms]`
-- **Prompt Tokens**: `[PLACEHOLDER: e.g. 642]`
-- **Completion Tokens**: `[PLACEHOLDER: e.g. 185]`
-- **Total Tokens**: `[PLACEHOLDER: e.g. 827]`
-- **Synthesized Finding Citation Anchors**: `[PLACEHOLDER: e.g. ["res_b7a8c9...", "line-acme-api", "rule-acme-rate"]]`
-- **Citation Verification Result**: `[PLACEHOLDER: passed (True)]`
-- **Generated Narrative**: `[PLACEHOLDER: Paste narrative from docs/sample_run.json]`
+- **Verification Date / Time**: `2026-10-14 21:34:46 UTC`
+- **Primary Provider**: `gemini`
+- **Model Name**: `gemini-3.5-flash-lite`
+- **Total Latency**: `8,034 ms (8.03s)`
+- **Prompt Tokens**: `2,107`
+- **Completion Tokens**: `686`
+- **Total Tokens**: `2,793`
+- **Synthesized Finding Citation Anchors**: `["res_3e75cc2c2fd9d45f", "line-api-calls", "rule-api-rate", "ev-acme-prod-1", "ev-acme-stg-1", "adj-acme-1"]`
+- **Citation Verification Result**: `passed (True)`
+- **Generated Narrative**: `"Deterministic billing engine confirmed an overcharge totaling 2500¢ across line item(s): line-api-calls (billed 5000¢, recalculated 2500¢). Discrepancy is eligible for credit approval."`
+- **Raw Model Text (Preserved for Audit)**: `"The deterministic billing engine confirms an overcharge on line item 'line-api-calls' (DB ID: 19). The customer was billed for 500 units at 10¢ per unit ($50.00), totaling 5000¢. However, usage telemetry records show 250 production units and 150 staging units. Contract rule 'rule-api-rate' explicitly exempts 'staging' and 'test' environments. Correct recalculation based on 250 billable production units at 10¢ yields 2500¢ ($25.00). After accounting for a verified prior goodwill credit of 500¢ (adj-acme-1), the correct net amount is 2000¢."`
+- **Consistency Enforcement**: Because the model formulation hallucinated an unanchored net adjustment amount (`2000¢`), the deterministic engine validator flagged `consistency_check_passed = False`, safely overwrote the narrative with the deterministic figure (`2500¢`), and permanently preserved the model formulation in `raw_ai_text`.
 
 ---
 
-## 6. Real Agent Mistakes Observed During Fix Session
+## 8. Real Agent Mistakes Observed During Fix Session
 
 The following entries document actual mistakes and false assumptions encountered and corrected during this targeted fix session:
 

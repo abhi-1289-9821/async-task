@@ -716,7 +716,8 @@ class TestEngineRegressions:
         result = calculate_line(line, [grad_rule, vol_rule, disc_rule, commit_rule], events)
 
         assert result.finding_type == FindingType.AMBIGUOUS
-        assert result.difference_cents == 0  # Ambiguous lines do not carry non-zero difference
+        assert result.difference_cents is None  # Ambiguous lines do not carry a single finalized difference
+        assert result.recalculated_amount_cents is None
         # Minimum commit of 100000 cents applies to both interpretations
         for interp in result.interpretations:
             assert interp.recalculated_amount_cents == 100000

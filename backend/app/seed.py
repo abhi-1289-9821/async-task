@@ -3,19 +3,22 @@ seed.py
 =======
 Demo data seeder for FairBill.
 
-Provides seed_demo_cases_if_empty(db) which creates three representative
-billing-dispute cases when the database is completely empty.
-
-Cases:
-  case-acme-101  - PER_UNIT overcharge (staging events exempt but billed).
-                   Expected engine result: CONFIRMED_CALCULATION_DISCREPANCY.
-  case-bravo-102 - TIERED_GRADUATED + TIERED_VOLUME competing rules.
-                   Expected engine result: AMBIGUOUS (two interpretations).
-  case-delta-103 - FLAT fee, billed exactly per contract.
-                   Expected engine result: NO_DISCREPANCY.
-
-This module is the single source of truth for demo data.
-backend/seed_demo_data.py imports from here so there is no duplication.
+Provides seed_demo_cases(db) and seed_demo_cases_if_empty(db) which seed
+12 comprehensive billing dispute cases:
+  - 7 Benchmark Dispute Scenarios:
+      1. case-1-acme-a: Missing evidence, unverified usage, claimed prior credit
+      2. case-2-acme-b: Verified graduated-tier overcharge
+      3. case-3-bravo: Conflicting contract amendments at tier threshold
+      4. case-4-delta: Fixed fee, duplicate charge, prior credit accounting
+      5. case-5-echo: Included units allowance & exempt environment removal
+      6. case-6-foxtrot: Percentage discount on eligible base & prompt injection resilience
+      7. case-7-golf: Minimum commitment floor & alleged waiver
+  - 5 Legacy & Regression Demo Cases:
+      8. case-acme-unverified
+      9. case-acme-verified
+      10. case-acme-101
+      11. case-bravo-102
+      12. case-delta-103
 """
 
 import hashlib
@@ -24,6 +27,7 @@ import logging
 from datetime import datetime, timezone
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.case import Case, CaseEvent, CaseStatus
@@ -101,8 +105,8 @@ def seed_demo_cases(db: Session, force: bool = False) -> list[str]:
             ]:
                 try:
                     db.execute(text(f"DROP TRIGGER IF EXISTS {trg};"))
-                except Exception:
-                    pass
+                except (OperationalError, SQLAlchemyError) as exc:
+                    logger.debug("Trigger drop skipped: %s", exc)
             db.commit()
 
         for cid in demo_ids:

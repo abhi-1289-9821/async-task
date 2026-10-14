@@ -133,10 +133,19 @@ def build_analysis_prompt(
         results_formatted.append(s)
     results_str = "\n".join(results_formatted)
 
-    events_str = "\n".join(
-        f"- Event ID: {e.get('id')}, Line: {e.get('line_id')}, Qty: {e.get('quantity')}, Env: {e.get('environment')}"
-        for e in (usage_events or [])
-    ) or "None provided (NO TELEMETRY AVAILABLE)"
+    MAX_PROMPT_EVENTS = 50
+    all_events = usage_events or []
+    if len(all_events) > MAX_PROMPT_EVENTS:
+        sampled = all_events[:MAX_PROMPT_EVENTS]
+        events_str = "\n".join(
+            f"- Event ID: {e.get('id')}, Line: {e.get('line_id')}, Qty: {e.get('quantity')}, Env: {e.get('environment')}"
+            for e in sampled
+        ) + f"\n... and {len(all_events) - MAX_PROMPT_EVENTS} additional telemetry events ingested and calculated deterministically by engine (total: {len(all_events)})."
+    else:
+        events_str = "\n".join(
+            f"- Event ID: {e.get('id')}, Line: {e.get('line_id')}, Qty: {e.get('quantity')}, Env: {e.get('environment')}"
+            for e in all_events
+        ) or "None provided (NO TELEMETRY AVAILABLE)"
 
     adj_str = "\n".join(
         f"- Adjustment ID: {a.get('id')}, Line: {a.get('invoice_line_id') or 'Global'}, Amount: {a.get('amount_cents')}¢, Desc: {a.get('description')}, Verified: {a.get('is_verified', True)}"

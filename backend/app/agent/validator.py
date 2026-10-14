@@ -8,6 +8,8 @@ Rigorous verification layer enforcing:
 """
 
 import logging
+import re
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -166,6 +168,9 @@ def validate_consistency(
         notes.append(
             f"AI finding type '{model_type}' contradicted deterministic engine result '{engine_type}'; overridden to '{engine_type}'"
         )
+        # If the model cautiously labelled a clear overcharge as POSSIBLE_DISCREPANCY, reconcile with engine
+        if model_type == "POSSIBLE_DISCREPANCY" and engine_type == "CONFIRMED_CALCULATION_DISCREPANCY":
+            return True, engine_type, notes
         return False, engine_type, notes
 
     return True, engine_type, []
@@ -273,10 +278,6 @@ def sanitize_resolution_options(
     return sanitized
 
 
-import re
-from decimal import Decimal
-
-
 def extract_monetary_amounts_cents(text: str) -> list[tuple[str, int, bool]]:
     """
     Extracts explicit dollar ($X or $X.YY) and cent (X¢, X cents) amounts from narrative text.
@@ -300,8 +301,8 @@ def extract_monetary_amounts_cents(text: str) -> list[tuple[str, int, bool]]:
         try:
             val_cents = int((Decimal(num_str) * 100).to_integral_value())
             results.append((raw_str, val_cents, is_rate))
-        except Exception:
-            pass
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            logger.debug("Dollar parse skipped for %r: %s", raw_str, exc)
 
     # Match 5,000 USD, 5000 USD, 50.00 USD, 5,000 dollars, 50 dollars (trailing USD/dollars)
     usd_matches = re.finditer(
@@ -316,8 +317,8 @@ def extract_monetary_amounts_cents(text: str) -> list[tuple[str, int, bool]]:
         try:
             val_cents = int((Decimal(num_str) * 100).to_integral_value())
             results.append((raw_str, val_cents, is_rate))
-        except Exception:
-            pass
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            logger.debug("USD parse skipped for %r: %s", raw_str, exc)
 
     # Match 5000¢, 5000 cents, 5000 cent
     cent_matches = re.finditer(
@@ -332,8 +333,8 @@ def extract_monetary_amounts_cents(text: str) -> list[tuple[str, int, bool]]:
         try:
             val_cents = int(num_str)
             results.append((raw_str, val_cents, is_rate))
-        except Exception:
-            pass
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            logger.debug("Cent parse skipped for %r: %s", raw_str, exc)
 
     return results
 

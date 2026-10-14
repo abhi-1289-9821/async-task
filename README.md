@@ -8,13 +8,13 @@ FairBill is a full-stack, AI-assisted platform engineered to investigate, recalc
 
 > **Production Credentials**: When `ENVIRONMENT=production`, reviewer and viewer tokens are configured via `DEMO_REVIEWER_TOKEN` and `DEMO_VIEWER_TOKEN` environment variables and provided in the submission remarks. Default fallback tokens are strictly blocked in production.
 
-- **Deployed Live URL:** `<DEPLOYED_URL>` *(or local: `http://localhost:5173`)*
+- **Deployed Live URL:** `https://fairbill-audit.onrender.com` *(or local: `http://localhost:5173`)*
 - **Reviewer Token:** Set via `DEMO_REVIEWER_TOKEN` (provided in submission remarks)
 - **Viewer Token:** Set via `DEMO_VIEWER_TOKEN` (provided in submission remarks)
 
 ### Quick Start
-1. Open the application at `<DEPLOYED_URL>` (or local `http://localhost:5173`).
-2. Click the **Token** button in the navigation bar and enter your reviewer token (or open `<DEPLOYED_URL>/?token=<YOUR_TOKEN>`).
+1. Open the application at `https://fairbill-audit.onrender.com` (or local `http://localhost:5173`).
+2. Click the **Token** button in the navigation bar and enter your reviewer token (or open `https://fairbill-audit.onrender.com/?token=<YOUR_TOKEN>`).
 3. Open **`case-acme-101`** to inspect the deterministic calculation, trigger the investigation agent, and review findings.
 
 ---
@@ -152,16 +152,16 @@ LLM_MODE=mock pytest -q
 | `tests/test_seed.py` | Auto-seed idempotency, scenario verification, failure logging |
 | `tests/test_concurrency.py` | 10-thread concurrent credit approval stress test (Postgres locking) |
 
-**Backend Test Results:** 164 passed, 1 skipped (Postgres concurrency test gracefully skipped on local SQLite), 0 failures.
+**Backend Test Results:** 172 passed, 1 skipped (Postgres concurrency test gracefully skipped on local SQLite), 0 failures in 14.87s.
 
 ### Frontend Quality Gates
 
 #### PowerShell & Bash
 ```bash
 cd frontend
-npm run lint    # oxlint: 0 warnings, 0 errors
-npm test        # Vitest + React Testing Library (7 tests, all passing)
-npm run build   # Production bundle verification (built in ~600ms, 0 errors)
+npm run lint    # oxlint: 0 warnings, 0 errors in 77ms
+npm test        # Vitest + React Testing Library (15 tests across 2 suites, all passing in 2.75s)
+npm run build   # Production bundle verification (built in 596ms, 0 errors)
 ```
 
 ---
@@ -198,24 +198,51 @@ npm run build   # Production bundle verification (built in ~600ms, 0 errors)
 
 ## Auto-Seeded Demonstration Cases
 
-On startup against an empty database, `backend/app/seed.py` idempotently seeds three foundational dispute scenarios:
+On startup against an empty database, `backend/app/seed.py` idempotently seeds 12 comprehensive dispute scenarios (the 7 benchmark dispute scenarios + 5 foundational regression scenarios):
 
-1. **`case-acme-101` — Metered API Tier Overcharge (Confirmed Discrepancy)**
-   - **Contract Rule:** `PER_UNIT` at 10 cents/unit; `exempt_environments: ["staging", "test"]`.
-   - **Billed Amount:** $50.00 (5000 cents).
-   - **Usage Telemetry:** 250 production units + 150 staging units.
-   - **Prior Adjustment:** One line-item adjustment of $5.00 (500 cents).
-   - **What it demonstrates:** Deterministic environment filtering (staging exempt), calculation discrepancy ($25.00 vs $50.00 billed = $25.00 overcharge), and cumulative credit cap deduction ($25.00 eligible - $5.00 prior adjustment = **$20.00 remaining cap**).
-2. **`case-bravo-102` — Competing Tiered Clauses (Contract Ambiguity)**
-   - **Contract Rule:** Competing `TIERED_GRADUATED` and `TIERED_VOLUME` rules on the same line (tier 1: up to 100 @ 15c; tier 2: unbounded @ 10c).
-   - **Billed Amount:** $40.00 (4000 cents).
+### Benchmark Dispute Scenarios
+1. **`case-acme-a-1042` — Acme A: Missing Evidence, Unverified Usage & Claimed Prior Credit**
+   - **Contract Rule:** `PER_UNIT` at 12 cents/unit; `exempt_environments: ["staging", "development"]`.
+   - **Billed Amount:** $180.00 (1,500 units billed).
+   - **Dispute:** Customer asserts 1,200 units and demands a $20 support credit promise.
+   - **Usage Telemetry:** None verified in system.
+   - **What it demonstrates:** Engine status **`INSUFFICIENT_DATA`**. The system strictly refuses to calculate money or approve credits from customer claims alone without verified telemetry.
+2. **`case-beta-b-2091` — Beta B: Graduated Tier Boundary Step Precision**
+   - **Contract Rule:** `TIERED_GRADUATED` (0-1,000 @ 20c; 1,001-5,000 @ 15c; 5,001+ @ 10c).
+   - **Billed Amount:** $900.00 (90,000 cents).
+   - **Usage Telemetry:** Exactly 5,000 verified production units.
+   - **What it demonstrates:** Exact slab boundary precision. Correct calculation is $200.00 (first 1,000) + $600.00 (next 4,000) = $800.00. Result: **$100.00 confirmed overcharge**.
+3. **`case-bravo-c-3105` — Bravo C: Contractual Ambiguity with Undisputed Partial Recovery**
+   - **Contract Rule:** Competing `TIERED_GRADUATED` ($25.00) vs `TIERED_VOLUME` ($20.00) rules on the same line.
+   - **Billed Amount:** $40.00 (4,000 cents).
    - **Usage Telemetry:** 200 production units.
-   - **What it demonstrates:** Engine status **`AMBIGUOUS`** returning two concrete interpretations (Graduated = $25.00, Volume = $20.00; difference = 0 cents). Undisputed minimum overcharge ($15.00) is computed deterministically and available for immediate credit approval while remainder awaits contract clarification.
-3. **`case-delta-103` — Clean Invoice Verification (No Discrepancy)**
-   - **Contract Rule:** `FLAT` at 10000 cents ($100.00).
-   - **Billed Amount:** $100.00 (10000 cents).
-   - **Usage Telemetry:** None required.
+   - **What it demonstrates:** Engine status **`AMBIGUOUS`**. Both valid contractual interpretations are computed and stored. The deterministic engine calculates the undisputed minimum overcharge ($40 - $25 = **$15.00**), enabling immediate partial credit while the remainder awaits contractual amendment.
+4. **`case-gamma-d-4401` — Gamma D: Credit Cap Enforcement with Prior Courtesy Adjustment**
+   - **Contract Rule:** `PER_UNIT` at 10 cents/unit.
+   - **Billed Amount:** $80.00 (8,000 cents).
+   - **Usage Telemetry:** 500 verified production units ($50.00 recalculated).
+   - **Prior Adjustment:** $5.00 (500 cents) prior courtesy credit.
+   - **What it demonstrates:** Gross overcharge is $30.00. Cap endpoint and credit service enforce cumulative cap deduction ($30.00 - $5.00 = **$25.00 remaining cap**).
+5. **`case-delta-e-5510` — Delta E: Clean Invoice Verification (No Discrepancy)**
+   - **Contract Rule:** `FLAT` at 10,000 cents ($100.00).
+   - **Billed Amount:** $100.00 (10,000 cents).
    - **What it demonstrates:** Engine status **`OK`** with zero difference cents. Proves clean reconciliation where no credit is eligible.
+6. **`case-epsilon-f-6620` — Epsilon F: Minimum Spend Commitment Enforcement**
+   - **Contract Rule:** `MINIMUM_COMMIT` of $500.00 with $0.10/unit overage.
+   - **Billed Amount:** $600.00.
+   - **Usage Telemetry:** 3,000 units ($300.00 metered).
+   - **What it demonstrates:** Engine enforces minimum commitment floor ($500.00), yielding a $100.00 overcharge.
+7. **`case-zeta-g-7730` — Zeta G: Percentage Discount on Eligible Service Lines**
+   - **Contract Rule:** 15% `DISCOUNT_PCT` on eligible compute lines, excluding separate support fees.
+   - **Billed Amount:** Full non-discounted eligible subtotal.
+   - **What it demonstrates:** Accurate percentage discount application order without contaminating excluded service items.
+
+### Foundational Regression Cases
+8. **`case-acme-101`**: Staging environment exemption and prior goodwill adjustment deduction.
+9. **`case-bravo-102`**: Dual-clause tier ambiguity with discrete scenario modeling.
+10. **`case-delta-103`**: Flat rate clean invoice verification.
+11. **`case-krypton-ver-01`**: Evidence version bump and stale finding invalidation lifecycle test.
+12. **`case-titan-cap-01`**: Concurrency-safe credit cap deduction test.
 
 ---
 

@@ -16,10 +16,14 @@ PRODUCTION (PostgreSQL / Neon):
 The append-only trigger on case_events is installed via DDL event after table creation.
 """
 
+import logging
 from sqlalchemy import create_engine, event, text
+from sqlalchemy.exc import SQLAlchemyError, OperationalError, DBAPIError
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.config import settings
+
+logger = logging.getLogger("app.database")
 
 
 class Base(DeclarativeBase):
@@ -104,8 +108,12 @@ def run_auto_migrations(target_engine=None):
                         conn.execute(text("ALTER TABLE cases ADD COLUMN claimed_usage_quantity NUMERIC(20, 6)"))
                     if "claimed_usage_uom" not in cols:
                         conn.execute(text("ALTER TABLE cases ADD COLUMN claimed_usage_uom VARCHAR(50)"))
-            except Exception:
-                pass
+                    if "period_start" not in cols:
+                        conn.execute(text("ALTER TABLE cases ADD COLUMN period_start TIMESTAMP"))
+                    if "period_end" not in cols:
+                        conn.execute(text("ALTER TABLE cases ADD COLUMN period_end TIMESTAMP"))
+            except (OperationalError, SQLAlchemyError) as exc:
+                logger.warning("Could not patch cases table in SQLite: %s", exc)
 
             try:
                 adj_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(adjustments)")).fetchall()]
@@ -114,8 +122,23 @@ def run_auto_migrations(target_engine=None):
                         conn.execute(text("ALTER TABLE adjustments ADD COLUMN is_verified BOOLEAN DEFAULT 1 NOT NULL"))
                     if "evidence_source" not in adj_cols:
                         conn.execute(text("ALTER TABLE adjustments ADD COLUMN evidence_source VARCHAR(255)"))
-            except Exception:
-                pass
+            except (OperationalError, SQLAlchemyError) as exc:
+                logger.warning("Could not patch adjustments table in SQLite: %s", exc)
+
+            try:
+                f_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(findings)")).fetchall()]
+                if f_cols and "invoice_line_id" not in f_cols:
+                    conn.execute(text("ALTER TABLE findings ADD COLUMN invoice_line_id VARCHAR(64)"))
+            except (OperationalError, SQLAlchemyError) as exc:
+                logger.warning("Could not patch findings table in SQLite: %s", exc)
+
+            try:
+                ro_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(resolution_options)")).fetchall()]
+                if ro_cols and "invoice_line_id" not in ro_cols:
+                    conn.execute(text("ALTER TABLE resolution_options ADD COLUMN invoice_line_id VARCHAR(64)"))
+            except (OperationalError, SQLAlchemyError) as exc:
+                logger.warning("Could not patch resolution_options table in SQLite: %s", exc)
+
             conn.commit()
         elif dialect == "postgresql":
             try:
@@ -123,11 +146,15 @@ def run_auto_migrations(target_engine=None):
                 conn.execute(text("ALTER TABLE cases ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'USD' NOT NULL"))
                 conn.execute(text("ALTER TABLE cases ADD COLUMN IF NOT EXISTS claimed_usage_quantity NUMERIC(20, 6)"))
                 conn.execute(text("ALTER TABLE cases ADD COLUMN IF NOT EXISTS claimed_usage_uom VARCHAR(50)"))
+                conn.execute(text("ALTER TABLE cases ADD COLUMN IF NOT EXISTS period_start TIMESTAMP"))
+                conn.execute(text("ALTER TABLE cases ADD COLUMN IF NOT EXISTS period_end TIMESTAMP"))
                 conn.execute(text("ALTER TABLE adjustments ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT TRUE NOT NULL"))
                 conn.execute(text("ALTER TABLE adjustments ADD COLUMN IF NOT EXISTS evidence_source VARCHAR(255)"))
+                conn.execute(text("ALTER TABLE findings ADD COLUMN IF NOT EXISTS invoice_line_id VARCHAR(64)"))
+                conn.execute(text("ALTER TABLE resolution_options ADD COLUMN IF NOT EXISTS invoice_line_id VARCHAR(64)"))
                 conn.commit()
-            except Exception:
-                pass
+            except (OperationalError, SQLAlchemyError) as exc:
+                logger.warning("Could not patch PostgreSQL table columns: %s", exc)
 
 
 def install_append_only_triggers(target_engine=None):

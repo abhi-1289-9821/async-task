@@ -20,17 +20,24 @@ export default function App() {
     }, 4500);
   };
 
-  const loadCases = async () => {
+  const loadCases = React.useCallback(async () => {
     try {
       const data = await getCases();
       setCases(data);
     } catch (err) {
       addToast('error', err.message || 'Failed to load dispute cases');
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadCases();
+    let isMounted = true;
+    getCases()
+      .then((data) => {
+        if (isMounted) setCases(data);
+      })
+      .catch((err) => {
+        if (isMounted) addToast('error', err.message || 'Failed to load dispute cases');
+      });
 
     const handleAuthChange = () => {
       loadCases();
@@ -39,10 +46,11 @@ export default function App() {
     window.addEventListener('tokenChanged', handleAuthChange);
     window.addEventListener('roleChanged', handleAuthChange);
     return () => {
+      isMounted = false;
       window.removeEventListener('tokenChanged', handleAuthChange);
       window.removeEventListener('roleChanged', handleAuthChange);
     };
-  }, []);
+  }, [loadCases]);
 
   const handleCaseCreated = (newCaseId) => {
     addToast('success', `Dispute case '${newCaseId}' created successfully`);

@@ -64,12 +64,10 @@ def compute_remaining_cap(
     Returns a dict with all 8 authoritative credit governance metrics.
     Used by both approve_credit and GET /cap endpoint.
     """
-    if line_result.difference_cents is None:
+    if getattr(line_result, "finding_type", None) in ("AMBIGUOUS", FindingTypeDB.AMBIGUOUS) or (getattr(line_result, "undisputed_overcharge_cents", None) and getattr(line_result, "undisputed_overcharge_cents") > 0):
+        eligible_overcharge = getattr(line_result, "undisputed_overcharge_cents", 0) or 0
+    elif line_result.difference_cents is None:
         eligible_overcharge = 0
-    elif getattr(line_result, "undisputed_overcharge_cents", None) and (
-        line_result.difference_cents == 0 or getattr(line_result, "finding_type", None) in ("AMBIGUOUS", FindingTypeDB.AMBIGUOUS)
-    ):
-        eligible_overcharge = line_result.undisputed_overcharge_cents
     else:
         eligible_overcharge = abs(line_result.difference_cents) if line_result.difference_cents < 0 else 0
 
@@ -155,7 +153,7 @@ def compute_remaining_cap(
     blocked_reason = None
     lr_ft = getattr(line_result, "finding_type", None)
     lr_ft_str = lr_ft.value if hasattr(lr_ft, "value") else str(lr_ft)
-    if lr_ft_str == "INSUFFICIENT_DATA" or line_result.difference_cents is None:
+    if lr_ft_str == "INSUFFICIENT_DATA" or (line_result.difference_cents is None and lr_ft_str != "AMBIGUOUS"):
         is_eligible = False
         blocked_reason = "Evidence is insufficient for deterministic calculation"
     else:
@@ -384,7 +382,7 @@ def approve_credit(
             detail="Credit approval requires finding with valid citations (citation validation failed)",
         )
 
-    if finding.consistency_check_passed is False:
+    if finding.consistency_check_passed is False and not (latest_review and latest_review.action == "ACCEPT" and finding.finding_type == "CONFIRMED_CALCULATION_DISCREPANCY"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Credit approval requires finding that passed consistency check (consistency check failed)",
@@ -444,7 +442,7 @@ def approve_credit(
         )
 
     lr_finding_type = line_result.finding_type.value if hasattr(line_result.finding_type, "value") else str(line_result.finding_type)
-    if lr_finding_type == "INSUFFICIENT_DATA" or line_result.difference_cents is None:
+    if lr_finding_type == "INSUFFICIENT_DATA" or (line_result.difference_cents is None and not is_undisputed_credit):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot approve credit: Calculation line has insufficient usage evidence (uncomputed amount).",
@@ -489,8 +487,6 @@ def approve_credit(
                 f"but credit was requested for line '{invoice_line_id}'"
             ),
         )
-
-    eligible_overcharge = abs(line_result.difference_cents)
 
     # Use shared helper — same logic as GET /cap endpoint
     cap_info = compute_remaining_cap(db, case_id, invoice_line_id, line_result)

@@ -385,8 +385,9 @@ export default function EvidenceModal({
 
             <form onSubmit={handleTelemetrySubmit}>
               <div className="form-group">
-                <label className="form-label">Audit Source Note</label>
+                <label className="form-label" htmlFor="telemetry-source-note">Audit Source Note</label>
                 <input
+                  id="telemetry-source-note"
                   type="text"
                   className="form-input"
                   value={sourceNote}
@@ -397,8 +398,9 @@ export default function EvidenceModal({
 
               {invoiceLines.length > 1 && (
                 <div className="form-group">
-                  <label className="form-label">Target Invoice Line</label>
+                  <label className="form-label" htmlFor="telemetry-line-select">Target Invoice Line</label>
                   <select
+                    id="telemetry-line-select"
                     className="form-select"
                     value={selectedTelemetryLine}
                     onChange={(e) => setSelectedTelemetryLine(e.target.value)}
@@ -414,8 +416,9 @@ export default function EvidenceModal({
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.25rem' }}>
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Consumed Quantity (Units)</label>
+                  <label className="form-label" htmlFor="telemetry-quantity">Consumed Quantity (Units)</label>
                   <input
+                    id="telemetry-quantity"
                     type="number"
                     step="0.01"
                     className="form-input font-mono"
@@ -425,8 +428,9 @@ export default function EvidenceModal({
                   />
                 </div>
                 <div className="form-group" style={{ marginBottom: 0 }}>
-                  <label className="form-label">Deployment Environment</label>
+                  <label className="form-label" htmlFor="telemetry-environment">Deployment Environment</label>
                   <select
+                    id="telemetry-environment"
                     className="form-select"
                     value={environment}
                     onChange={(e) => setEnvironment(e.target.value)}

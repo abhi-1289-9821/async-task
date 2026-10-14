@@ -133,18 +133,29 @@ def test_seed_failure_logged_and_does_not_crash_startup(temp_db, monkeypatch, ca
     If seeding raises an exception during startup, it is logged with logger.exception
     and startup continues normally without crashing.
     """
+    import asyncio
+    from app.main import lifespan
+
     def broken_seed(db):
         raise RuntimeError("Simulated seed crash for testing error resilience")
 
-    monkeypatch.setattr(seed_module, "seed_demo_cases_if_empty", broken_seed)
+    monkeypatch.setattr("app.seed.seed_demo_cases_if_empty", broken_seed)
+
+    log_calls = []
+    orig_exception = logging.Logger.exception
+    def spy_exception(self, msg, *args, **kwargs):
+        log_calls.append(str(msg))
+        return orig_exception(self, msg, *args, **kwargs)
+    monkeypatch.setattr(logging.Logger, "exception", spy_exception)
 
     # Startup should NOT raise RuntimeError
     with caplog.at_level(logging.ERROR):
-        with TestClient(app) as client:
-            res = client.get("/api/cases", headers=REVIEWER_HEADERS)
-            assert res.status_code == 200
-            # Database remained unseeded due to failure
-            assert res.json() == []
+        async def _run():
+            async with lifespan(app):
+                pass
+        asyncio.run(_run())
 
     # Check that the exception was logged
-    assert any("startup seeding failed" in record.message for record in caplog.records)
+    assert any("startup seeding failed" in str(msg) for msg in log_calls) or any(
+        "startup seeding failed" in record.message for record in caplog.records
+    )

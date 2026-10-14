@@ -23,7 +23,8 @@ from app.database import Base
 import app.models  # noqa: F401
 
 target_metadata = Base.metadata
-config.set_main_option("sqlalchemy.url", settings.database_url)
+if not config.get_main_option("sqlalchemy.url"):
+    config.set_main_option("sqlalchemy.url", settings.database_url)
 
 
 def run_migrations_offline() -> None:
@@ -38,7 +39,7 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = config.get_main_option("sqlalchemy.url")
+    url = config.get_main_option("sqlalchemy.url") or settings.database_url
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -57,8 +58,12 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    section = config.get_section(config.config_ini_section, {}).copy()
+    effective_url = config.get_main_option("sqlalchemy.url") or settings.database_url
+    section["sqlalchemy.url"] = effective_url
+
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

@@ -372,3 +372,53 @@ class TestDatabaseSchemaAndConstraints:
             db_session.commit()
         db_session.rollback()
 
+    def test_alembic_migrations_cover_all_model_columns(self, tmp_path):
+        """Verifies that Alembic migrations up to head include all model columns (including invoice_line_id)."""
+        import os
+        from alembic import command
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        from sqlalchemy import inspect, create_engine
+
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        ini_path = os.path.join(backend_dir, "alembic.ini")
+        alembic_cfg = Config(ini_path)
+        alembic_cfg.set_main_option("script_location", os.path.join(backend_dir, "migrations"))
+
+        # Verify latest revision in migration scripts is c3d4e5f6a7b8
+        script = ScriptDirectory.from_config(alembic_cfg)
+        head_rev = script.get_current_head()
+        assert head_rev == "c3d4e5f6a7b8"
+
+        # Apply migrations cleanly to a fresh SQLite database
+        temp_db_path = tmp_path / "alembic_migrated.db"
+        temp_db_url = f"sqlite:///{temp_db_path}"
+        alembic_cfg.set_main_option("sqlalchemy.url", temp_db_url)
+        command.upgrade(alembic_cfg, "head")
+
+        check_engine = create_engine(temp_db_url)
+        inspector = inspect(check_engine)
+
+        # Verify findings has invoice_line_id
+        finding_cols = {col["name"] for col in inspector.get_columns("findings")}
+        assert "invoice_line_id" in finding_cols
+
+        # Verify resolution_options has invoice_line_id
+        ro_cols = {col["name"] for col in inspector.get_columns("resolution_options")}
+        assert "invoice_line_id" in ro_cols
+
+        # Verify cases has period_start, period_end, claimed_usage_quantity, claimed_usage_uom
+        case_cols = {col["name"] for col in inspector.get_columns("cases")}
+        assert "period_start" in case_cols
+        assert "period_end" in case_cols
+        assert "claimed_usage_quantity" in case_cols
+        assert "claimed_usage_uom" in case_cols
+
+        # Verify adjustments has is_verified, evidence_source
+        adj_cols = {col["name"] for col in inspector.get_columns("adjustments")}
+        assert "is_verified" in adj_cols
+        assert "evidence_source" in adj_cols
+
+        check_engine.dispose()
+
+

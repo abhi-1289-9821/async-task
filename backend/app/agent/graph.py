@@ -208,6 +208,16 @@ class InvestigationWorkflow:
                 "difference_cents": lr.difference_cents,
                 "finding_type": lr.finding_type.value,
                 "explanation": lr.explanation,
+                "quantity_used": float(lr.quantity_used) if lr.quantity_used is not None else 0.0,
+                "exempt_quantity": float(lr.exempt_quantity) if lr.exempt_quantity is not None else 0.0,
+                "interpretations": [
+                    {
+                        "interpretation_id": it.get("interpretation_id") if isinstance(it, dict) else getattr(it, "interpretation_id", ""),
+                        "recalculated_amount_cents": it.get("recalculated_amount_cents", 0) if isinstance(it, dict) else getattr(it, "recalculated_amount_cents", 0),
+                        "assumptions": it.get("assumptions", []) if isinstance(it, dict) else getattr(it, "assumptions", []),
+                    }
+                    for it in (lr.interpretations or [])
+                ],
             })
             valid_result_ids.append(lr.result_id)
 
@@ -230,6 +240,11 @@ class InvestigationWorkflow:
             "result_hash": calc.result_hash,
             "line_results": line_results,
             "valid_result_ids": valid_result_ids,
+            "quarantined_events": [
+                q if isinstance(q, dict) else {"event_id": getattr(q, "event_id", str(q)), "reason": getattr(q, "reason", "Quarantined")}
+                for lr in calc.line_results
+                for q in (lr.quarantined_events or [])
+            ],
         }
 
     def analyze_findings_node(self, state: AgentState) -> dict[str, Any]:
@@ -334,7 +349,7 @@ class InvestigationWorkflow:
                 "total_difference_cents": total_diff,
             }
             narrative_passed, nar_errs = validator.validate_narrative_amounts(
-                sanitized_rf, line_results, summary_calc
+                sanitized_rf, line_results, summary_calc, contract_rules=state.get("contract_rules", [])
             )
             if not narrative_passed or not payload_passed:
                 consist_passed = False
@@ -346,11 +361,24 @@ class InvestigationWorkflow:
             f_copy["citation_validation_passed"] = citation_passed
             f_copy["consistency_check_passed"] = consist_passed
             f_copy["finding_type"] = final_finding_type
+
+            # Preserve validation notes in finding assumptions so reviewers see why it was downgraded
+            val_notes = list(nar_errs) + list(con_errs) + list(p_errs)
+            if val_notes:
+                current_assumptions = list(f_copy.get("assumptions") or [])
+                for vn in val_notes:
+                    if vn not in current_assumptions:
+                        current_assumptions.append(f"Validation Note: {vn}")
+                f_copy["assumptions"] = current_assumptions
+
             validated_findings.append(f_copy)
 
-        # 4. Sanitize resolution options
+        # 4. Sanitize resolution options against validated finding type
+        primary_f_type = validated_findings[0]["finding_type"] if validated_findings else "UNRESOLVED"
         raw_options = state.get("raw_options", [])
-        validated_options = validator.sanitize_resolution_options(raw_options, line_results)
+        validated_options = validator.sanitize_resolution_options(
+            raw_options, line_results, finding_type=primary_f_type
+        )
 
         # 5. Status: if LLM fallback occurred, mark as PARTIAL
         status_val = "COMPLETED"
@@ -389,18 +417,26 @@ class InvestigationWorkflow:
             status_val = "DISCARDED"
             state["status_reason"] = "Investigation superseded by newer evidence uploaded concurrently"
 
-        # 1. InvestigationRun record
-        db_run = InvestigationRun(
-            id=run_id,
-            case_id=state["case_id"],
-            calculation_id=state.get("calculation_id"),
-            evidence_version=state.get("evidence_version", 1),
-            status=RunStatus(status_val),
-            status_reason=state.get("status_reason"),
-            token_usage=state.get("token_usage"),
-            completed_at=datetime.now(timezone.utc),
-        )
-        self.db.add(db_run)
+        # 1. Update existing InvestigationRun record (created at start of run_investigation)
+        db_run = self.db.query(InvestigationRun).filter(InvestigationRun.id == run_id).one_or_none()
+        if db_run:
+            db_run.status = RunStatus(status_val)
+            db_run.status_reason = state.get("status_reason")
+            db_run.calculation_id = state.get("calculation_id")
+            db_run.token_usage = state.get("token_usage")
+            db_run.completed_at = datetime.now(timezone.utc)
+        else:
+            db_run = InvestigationRun(
+                id=run_id,
+                case_id=state["case_id"],
+                calculation_id=state.get("calculation_id"),
+                evidence_version=state.get("evidence_version", 1),
+                status=RunStatus(status_val),
+                status_reason=state.get("status_reason"),
+                token_usage=state.get("token_usage"),
+                completed_at=datetime.now(timezone.utc),
+            )
+            self.db.add(db_run)
 
         # If BLOCKED, DISCARDED, or FAILED, do NOT create active findings
         if status_val in ("BLOCKED", "DISCARDED", "FAILED"):
@@ -501,6 +537,25 @@ def run_investigation(
     case = db.query(Case).filter(Case.id == case_id).one_or_none()
     evidence_version = case.evidence_version if case else 1
 
+    # Insert InvestigationRun as RUNNING immediately to activate concurrent repeat-run guard
+    running_run = InvestigationRun(
+        id=run_id,
+        case_id=case_id,
+        status=RunStatus.RUNNING,
+        evidence_version=evidence_version,
+        token_usage={
+            "provider": None,
+            "model": None,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "attempts": [],
+        },
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(running_run)
+    db.commit()
+
     initial_state: AgentState = {
         "case_id": case_id,
         "run_id": run_id,
@@ -519,11 +574,23 @@ def run_investigation(
     except Exception as e:
         logger.error("Investigation workflow failed: %s", e)
         db.rollback()
-        # Persist a FAILED InvestigationRun so audit trail accurately reflects failure
+        # Update existing InvestigationRun to FAILED
         failed_run = db.query(InvestigationRun).filter(InvestigationRun.id == run_id).one_or_none()
         attempts = getattr(e, "attempts", [])
         clean_reason = llm_client.sanitize_error_message(str(e))
-        if not failed_run:
+        if failed_run:
+            failed_run.status = RunStatus.FAILED
+            failed_run.status_reason = clean_reason
+            failed_run.token_usage = {
+                "provider": None,
+                "model": None,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "attempts": attempts,
+            }
+            failed_run.completed_at = datetime.now(timezone.utc)
+        else:
             failed_run = InvestigationRun(
                 id=run_id,
                 case_id=case_id,
@@ -541,21 +608,22 @@ def run_investigation(
                 completed_at=datetime.now(timezone.utc),
             )
             db.add(failed_run)
-            failed_event = CaseEvent(
-                case_id=case_id,
-                event_type="INVESTIGATION_RUN_FAILED",
-                actor=actor,
-                details={
-                    "run_id": run_id,
-                    "actor": actor,
-                    "reason": clean_reason,
-                    "attempts": attempts,
-                    "evidence_version": evidence_version,
-                },
-                correlation_id=correlation_id,
-            )
-            db.add(failed_event)
-            db.commit()
+
+        failed_event = CaseEvent(
+            case_id=case_id,
+            event_type="INVESTIGATION_RUN_FAILED",
+            actor=actor,
+            details={
+                "run_id": run_id,
+                "actor": actor,
+                "reason": clean_reason,
+                "attempts": attempts,
+                "evidence_version": evidence_version,
+            },
+            correlation_id=correlation_id,
+        )
+        db.add(failed_event)
+        db.commit()
         return failed_run
 
     # Return refreshed InvestigationRun

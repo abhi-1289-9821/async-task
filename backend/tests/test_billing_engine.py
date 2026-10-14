@@ -168,9 +168,26 @@ class TestPerUnit:
     def test_zero_usage(self):
         line = make_line(original_cents=100)
         rule = make_rule(RuleType.PER_UNIT, rate_cents=10)
-        result = calculate_line(line, [rule], [])
+        result = calculate_line(line, [rule], [make_event(qty=0)])
         assert result.recalculated_amount_cents == 0
         assert result.quantity_used == Decimal("0")
+
+    def test_missing_usage_events_returns_insufficient_data(self):
+        """Missing usage events for metered rule must not default to 0 and full refund."""
+        line = make_line(original_cents=5000)
+        rule = make_rule(RuleType.PER_UNIT, rate_cents=10)
+        result = calculate_line(line, [rule], [])
+        assert result.finding_type == FindingType.INSUFFICIENT_DATA
+        assert result.recalculated_amount_cents == 0
+
+    def test_all_quarantined_events_returns_insufficient_data(self):
+        """When all usage events are quarantined, metered rule returns INSUFFICIENT_DATA."""
+        line = make_line(original_cents=5000)
+        rule = make_rule(RuleType.PER_UNIT, rate_cents=10)
+        bad_events = [make_event(qty=-5, event_id="E_BAD")]
+        result = calculate_line(line, [rule], bad_events)
+        assert result.finding_type == FindingType.INSUFFICIENT_DATA
+        assert len(result.quarantined_events) == 1
 
     def test_multiple_events_summed(self):
         line = make_line(original_cents=200)
@@ -229,7 +246,7 @@ class TestTieredGraduated:
     def test_zero_usage(self):
         line = make_line(original_cents=100)
         rule = make_rule(RuleType.TIERED_GRADUATED, tiers=self._std_tiers())
-        result = calculate_line(line, [rule], [])
+        result = calculate_line(line, [rule], [make_event(qty=0)])
         assert result.recalculated_amount_cents == 0
 
 
@@ -299,7 +316,7 @@ class TestIncludedUnits:
     def test_zero_usage_no_charge(self):
         line = make_line(original_cents=500)
         rule = make_rule(RuleType.INCLUDED_UNITS, included_units=100, overage_rate_cents=5)
-        result = calculate_line(line, [rule], [])
+        result = calculate_line(line, [rule], [make_event(qty=0)])
         assert result.recalculated_amount_cents == 0
 
     def test_exactly_at_boundary_no_overage(self):
@@ -641,7 +658,9 @@ class TestRunCalculation:
         rule1 = make_rule(RuleType.PER_UNIT, line_id="L1", rate_cents=10)
         events = [make_event(line_id="L2", qty=100)]  # L2 event, not L1
         result = run_calculation([line1], [rule1], events)
-        assert result.total_recalculated_cents == 0  # no L1 events → 0 usage
+        assert result.status == EngineStatus.INSUFFICIENT_DATA
+        assert result.line_results[0].finding_type == FindingType.INSUFFICIENT_DATA
+        assert result.total_difference_cents == 0  # no phantom full refund
 
     def test_ok_status_all_clean(self):
         line = make_line()
@@ -802,5 +821,19 @@ class TestEngineRegressions:
         assert "ev_nan" in quarantined_ids
         assert "ev_inf" in quarantined_ids
         assert res.recalculated_amount_cents == 500
+
+    def test_discount_pct_none_returns_insufficient_data(self):
+        """DISCOUNT_PCT rule with None discount_pct returns INSUFFICIENT_DATA and doesn't crash."""
+        line = make_line(original_cents=5000)
+        primary = make_rule(RuleType.FLAT, rate_cents=5000)
+        disc_none = ContractRule(
+            rule_id="R_DISC_NONE",
+            line_id=line.line_id,
+            rule_type=RuleType.DISCOUNT_PCT,
+            discount_pct=None,
+        )
+        res = calculate_line(line, [primary, disc_none], [])
+        assert res.finding_type == FindingType.INSUFFICIENT_DATA
+        assert "missing discount percentage" in res.explanation
 
 

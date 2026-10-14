@@ -104,13 +104,16 @@ def validate_consistency(
 ) -> tuple[bool, str, list[str]]:
     """
     Verifies that the finding type is mathematically consistent with the deterministic engine.
-    If contradiction exists, returns (False, "UNRESOLVED", errors).
+    If contradiction exists, overrides with engine-derived truth.
     """
     finding_type = finding.get("finding_type", "UNRESOLVED")
     errors = []
 
-    # 1. Contradiction: AI claims discrepancy, but engine has 0 difference and OK status
     has_overcharge = any(lr.get("difference_cents", 0) < 0 for lr in line_results)
+    has_ambiguity = (calculation_status == "AMBIGUOUS") or any(lr.get("finding_type") == "AMBIGUOUS" for lr in line_results)
+    has_insufficient = (calculation_status == "INSUFFICIENT_DATA") or any(lr.get("finding_type") == "INSUFFICIENT_DATA" for lr in line_results)
+
+    # 1. Contradiction: AI claims discrepancy, but engine has 0 difference and OK status
     if finding_type == "CONFIRMED_CALCULATION_DISCREPANCY":
         if not has_overcharge and total_difference_cents == 0:
             errors.append(
@@ -119,18 +122,25 @@ def validate_consistency(
             return False, "UNRESOLVED", errors
 
     # 2. Contradiction: Engine found ambiguity, but AI claimed NO_DISCREPANCY
-    if calculation_status == "AMBIGUOUS" and finding_type == "NO_DISCREPANCY":
+    if has_ambiguity and finding_type == "NO_DISCREPANCY":
         errors.append(
-            "Contradiction: Engine reported AMBIGUOUS clauses, but AI claimed NO_DISCREPANCY"
+            "Contradiction: Engine reported AMBIGUOUS clauses, but AI claimed NO_DISCREPANCY; derived CONTRACT_AMBIGUITY"
         )
         return False, "CONTRACT_AMBIGUITY", errors
 
     # 3. Contradiction: Engine found missing data, but AI claimed NO_DISCREPANCY
-    if calculation_status == "INSUFFICIENT_DATA" and finding_type == "NO_DISCREPANCY":
+    if has_insufficient and finding_type == "NO_DISCREPANCY":
         errors.append(
-            "Contradiction: Engine reported INSUFFICIENT_DATA, but AI claimed NO_DISCREPANCY"
+            "Contradiction: Engine reported INSUFFICIENT_DATA, but AI claimed NO_DISCREPANCY; derived INSUFFICIENT_EVIDENCE"
         )
         return False, "INSUFFICIENT_EVIDENCE", errors
+
+    # 4. Contradiction: Engine found overcharge, but AI claimed NO_DISCREPANCY
+    if (has_overcharge or total_difference_cents < 0) and finding_type == "NO_DISCREPANCY":
+        errors.append(
+            "Contradiction: Deterministic engine confirmed an overcharge, but AI claimed NO_DISCREPANCY; derived CONFIRMED_CALCULATION_DISCREPANCY from engine math"
+        )
+        return True, "CONFIRMED_CALCULATION_DISCREPANCY", errors
 
     return True, finding_type, []
 
@@ -138,11 +148,13 @@ def validate_consistency(
 def sanitize_resolution_options(
     options: list[dict[str, Any]],
     line_results: list[dict[str, Any]],
+    finding_type: str = "CONFIRMED_CALCULATION_DISCREPANCY",
 ) -> list[dict[str, Any]]:
     """
-    Validates resolution options.
-    For RECOMMEND_CREDIT, requires a valid line result with negative difference (overcharge).
-    Ensures no financial amounts are accepted from LLM text.
+    Validates resolution options against the validated finding type and line results.
+    - RECOMMEND_CREDIT is ONLY allowed if finding_type is CONFIRMED_CALCULATION_DISCREPANCY
+      and anchored to a verified overcharged line result.
+    - If finding is UNRESOLVED or CONTRACT_AMBIGUITY, RECOMMEND_CREDIT is forbidden.
     """
     line_results_by_id = {lr.get("id"): lr for lr in line_results if lr.get("id") is not None}
     sanitized: list[dict[str, Any]] = []
@@ -153,6 +165,13 @@ def sanitize_resolution_options(
         lr_id = opt.get("calculation_line_result_id")
 
         if opt_type == "RECOMMEND_CREDIT":
+            # Forbid credit recommendations if finding is not confirmed discrepancy
+            if finding_type != "CONFIRMED_CALCULATION_DISCREPANCY":
+                logger.warning(
+                    "Rejected RECOMMEND_CREDIT option: finding_type is '%s' (only CONFIRMED_CALCULATION_DISCREPANCY can recommend credit)",
+                    finding_type,
+                )
+                continue
             # Must point to an existing line result with an overcharge
             lr = line_results_by_id.get(lr_id)
             if not lr or lr.get("difference_cents", 0) >= 0:
@@ -172,11 +191,30 @@ def sanitize_resolution_options(
         })
 
     if not sanitized:
-        sanitized.append({
-            "option_type": "CLOSE_NO_ADJUSTMENT",
-            "description": "Default closure: no valid credit recommendation could be verified.",
-            "calculation_line_result_id": None,
-        })
+        if finding_type == "CONTRACT_AMBIGUITY":
+            sanitized.append({
+                "option_type": "ESCALATE",
+                "description": "Escalate to account management and legal counsel to determine the intended contractual tier model.",
+                "calculation_line_result_id": None,
+            })
+        elif finding_type == "INSUFFICIENT_EVIDENCE":
+            sanitized.append({
+                "option_type": "REQUEST_EVIDENCE",
+                "description": "Request missing usage telemetry or contract amendment documentation.",
+                "calculation_line_result_id": None,
+            })
+        elif finding_type == "UNRESOLVED":
+            sanitized.append({
+                "option_type": "ESCALATE",
+                "description": "Escalate for manual reviewer adjudication due to contradictory or unverified evidence.",
+                "calculation_line_result_id": None,
+            })
+        else:
+            sanitized.append({
+                "option_type": "CLOSE_NO_ADJUSTMENT",
+                "description": "Close dispute with no financial adjustment; billing matches contractual terms.",
+                "calculation_line_result_id": None,
+            })
 
     return sanitized
 
@@ -185,45 +223,61 @@ import re
 from decimal import Decimal
 
 
-def extract_monetary_amounts_cents(text: str) -> list[tuple[str, int]]:
+def extract_monetary_amounts_cents(text: str) -> list[tuple[str, int, bool]]:
     """
     Extracts explicit dollar ($X or $X.YY) and cent (X¢, X cents) amounts from narrative text.
-    Returns list of (raw_token, amount_cents).
+    Returns list of (raw_token, amount_cents, is_rate).
+    is_rate is True if the amount is explicitly followed by a unit rate specifier (e.g. /unit, per call).
     """
     if not text:
         return []
     results = []
 
-    # Match $50, $50.00, $0.50, $1,000.00, $9,999.99 (with optional comma grouping)
-    dollar_matches = re.finditer(r"\$([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)", text)
+    # Match $50, $50.00, $0.50, $1,000.00, $9,999.99 (with optional rate suffix)
+    dollar_matches = re.finditer(
+        r"\$([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)(\s*(?:/|per\s+)[a-zA-Z]+)?",
+        text,
+        re.IGNORECASE,
+    )
     for m in dollar_matches:
         raw_str = m.group(0)
         num_str = m.group(1).replace(",", "")
+        is_rate = bool(m.group(2))
         try:
             val_cents = int((Decimal(num_str) * 100).to_integral_value())
-            results.append((raw_str, val_cents))
+            results.append((raw_str, val_cents, is_rate))
         except Exception:
             pass
 
     # Match 5,000 USD, 5000 USD, 50.00 USD, 5,000 dollars, 50 dollars (trailing USD/dollars)
-    usd_matches = re.finditer(r"(?<![0-9\$])([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*(?:USD|dollars?)\b", text, re.IGNORECASE)
+    usd_matches = re.finditer(
+        r"(?<![0-9\$])([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*(?:USD|dollars?)(\s*(?:/|per\s+)[a-zA-Z]+)?\b",
+        text,
+        re.IGNORECASE,
+    )
     for m in usd_matches:
         raw_str = m.group(0).strip()
         num_str = m.group(1).replace(",", "")
+        is_rate = bool(m.group(2))
         try:
             val_cents = int((Decimal(num_str) * 100).to_integral_value())
-            results.append((raw_str, val_cents))
+            results.append((raw_str, val_cents, is_rate))
         except Exception:
             pass
 
-    # Match 5000¢, 5000 cents, 5000 cent (handles punctuation like 5000¢. without \b failure on non-word ¢)
-    cent_matches = re.finditer(r"(?<![0-9])([0-9]+)\s*(?:¢|cents?)(?![a-zA-Z0-9])", text, re.IGNORECASE)
+    # Match 5000¢, 5000 cents, 5000 cent
+    cent_matches = re.finditer(
+        r"(?<![0-9])([0-9]+)\s*(?:¢|cents?)(\s*(?:/|per\s+)[a-zA-Z]+)?(?![a-zA-Z0-9])",
+        text,
+        re.IGNORECASE,
+    )
     for m in cent_matches:
         raw_str = m.group(0).strip()
         num_str = m.group(1)
+        is_rate = bool(m.group(2))
         try:
             val_cents = int(num_str)
-            results.append((raw_str, val_cents))
+            results.append((raw_str, val_cents, is_rate))
         except Exception:
             pass
 
@@ -234,20 +288,42 @@ def validate_narrative_amounts(
     finding: dict[str, Any],
     line_results: list[dict[str, Any]],
     summary: dict[str, Any],
+    contract_rules: list[dict[str, Any]] | None = None,
 ) -> tuple[bool, list[str]]:
     """
     Scans AI finding narrative, facts, and explanations for fabricated dollar amounts.
     All monetary values mentioned in the text must be anchored to numbers emitted
-    by the deterministic billing engine.
+    by the deterministic billing engine, contract rules, or valid rate figures.
     """
-    # Allow 0 and numbers calculated by deterministic engine
     allowed_cents = {0}
+    allowed_rate_cents = set()
+
     for lr in line_results:
         allowed_cents.add(lr.get("original_amount_cents", 0))
         allowed_cents.add(lr.get("recalculated_amount_cents", 0))
         allowed_cents.add(abs(lr.get("difference_cents", 0)))
         if lr.get("applied_minimum_commit_cents"):
             allowed_cents.add(lr["applied_minimum_commit_cents"])
+        for interp in lr.get("interpretations") or []:
+            if isinstance(interp, dict):
+                amt = interp.get("recalculated_amount_cents", 0)
+                allowed_cents.add(amt)
+                allowed_cents.add(abs(amt - lr.get("original_amount_cents", 0)))
+
+    for rule in (contract_rules or []):
+        r_rate = rule.get("rate_cents", 0)
+        allowed_cents.add(r_rate)
+        allowed_rate_cents.add(r_rate)
+        if rule.get("overage_rate_cents"):
+            allowed_cents.add(rule["overage_rate_cents"])
+            allowed_rate_cents.add(rule["overage_rate_cents"])
+        if rule.get("minimum_commit_cents"):
+            allowed_cents.add(rule["minimum_commit_cents"])
+        for tier in rule.get("tiers") or []:
+            if isinstance(tier, dict):
+                t_price = tier.get("price_per_unit_cents", 0) or tier.get("rate_cents", 0)
+                allowed_cents.add(t_price)
+                allowed_rate_cents.add(t_price)
 
     if summary:
         allowed_cents.add(summary.get("total_original_billed_cents", 0))
@@ -267,7 +343,10 @@ def validate_narrative_amounts(
     unanchored = []
     for text in texts_to_scan:
         extracted = extract_monetary_amounts_cents(text)
-        for raw_token, cents in extracted:
+        for raw_token, cents, is_rate in extracted:
+            # If explicit rate token (e.g. $0.10/unit) and matches contract rate, or is valid rate
+            if is_rate and (cents in allowed_rate_cents or cents in allowed_cents):
+                continue
             if cents not in allowed_cents:
                 unanchored.append(
                     f"Fabricated monetary amount '{raw_token}' ({cents}¢) detected in AI narrative; not anchored to engine calculation"

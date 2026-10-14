@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Sparkles, Plus, AlertCircle } from 'lucide-react';
-import { createCase } from '../api/client';
+import { createCase, uploadEvidence } from '../api/client';
 
 export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
   const [caseId, setCaseId] = useState(`case-${Date.now().toString().slice(-6)}`);
@@ -14,13 +14,23 @@ export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
   const [originalAmountDollars, setOriginalAmountDollars] = useState('50.00');
   const [ruleType, setRuleType] = useState('PER_UNIT');
   const [rateCents, setRateCents] = useState('10');
+  const [selectedScenario, setSelectedScenario] = useState('custom');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setCaseId(`case-${Date.now().toString().slice(-6)}`);
+      setError(null);
+      setSelectedScenario('custom');
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   // Preset Scenario loader
   const loadScenario = (type) => {
+    setSelectedScenario(type);
     const stamp = Date.now().toString().slice(-5);
     if (type === 'overcharge') {
       setCaseId(`case-acme-${stamp}`);
@@ -38,10 +48,10 @@ export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
       setTitle('Underspecified Tiered Pricing Clause');
       setDisputeDescription('Dispute regarding tier calculation method on 200 compute units. Contract rule card contains competing graduated and volume interpretations.');
       setDisputedAmountDollars('15.00');
-      setLineDesc('Compute Units Band');
-      setOriginalAmountDollars('30.00');
+      setLineDesc('Compute Units Band A');
+      setOriginalAmountDollars('40.00');
       setRuleType('TIERED_GRADUATED');
-      setRateCents('8');
+      setRateCents('0');
     } else if (type === 'clean') {
       setCaseId(`case-clean-${stamp}`);
       setCustomerName('Delta Cloud');
@@ -76,6 +86,49 @@ export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
       const rate = parseInt(rateCents || '0', 10);
       const lineId = `line-${caseId}-1`;
 
+      let contractRules = [];
+      if (selectedScenario === 'ambiguity') {
+        // Real ambiguity requires both graduated and volume rules on the same line
+        contractRules = [
+          {
+            id: `rule-${caseId}-grad`,
+            line_id: lineId,
+            rule_type: 'TIERED_GRADUATED',
+            rate_cents: 0,
+            tiers: [
+              { up_to: 100, price_per_unit_cents: 15 },
+              { up_to: null, price_per_unit_cents: 10 }
+            ],
+            exempt_environments: ['staging'],
+          },
+          {
+            id: `rule-${caseId}-vol`,
+            line_id: lineId,
+            rule_type: 'TIERED_VOLUME',
+            rate_cents: 0,
+            tiers: [
+              { up_to: 100, price_per_unit_cents: 15 },
+              { up_to: null, price_per_unit_cents: 10 }
+            ],
+            exempt_environments: ['staging'],
+          }
+        ];
+      } else {
+        contractRules = [
+          {
+            id: `rule-${caseId}-1`,
+            line_id: lineId,
+            rule_type: ruleType,
+            rate_cents: rate,
+            tiers: ruleType.startsWith('TIERED') ? [
+              { up_to: 100, price_per_unit_cents: 10 },
+              { up_to: null, price_per_unit_cents: 5 }
+            ] : null,
+            exempt_environments: ['staging'],
+          },
+        ];
+      }
+
       const payload = {
         id: caseId,
         title,
@@ -89,22 +142,55 @@ export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
             original_amount_cents: originalCents,
           },
         ],
-        contract_rules: [
-          {
-            id: `rule-${caseId}-1`,
-            line_id: lineId,
-            rule_type: ruleType,
-            rate_cents: rate,
-            tiers: ruleType.startsWith('TIERED') ? [
-              { up_to: 100, rate_cents: 10 },
-              { up_to: null, rate_cents: 5 }
-            ] : null,
-            exempt_environments: ['staging'],
-          },
-        ],
+        contract_rules: contractRules,
       };
 
       await createCase(payload);
+
+      // Auto-upload preset telemetry evidence
+      if (selectedScenario === 'ambiguity') {
+        try {
+          await uploadEvidence(caseId, {
+            events: [
+              {
+                event_id: `ev-${caseId}-1`,
+                line_id: lineId,
+                timestamp: new Date().toISOString(),
+                quantity: 200.0,
+                environment: 'production',
+              }
+            ],
+            source_note: 'Compute Server Cluster Metrics',
+          });
+        } catch (uploadErr) {
+          console.warn('Initial preset evidence upload warning:', uploadErr);
+        }
+      } else if (selectedScenario === 'overcharge') {
+        try {
+          await uploadEvidence(caseId, {
+            events: [
+              {
+                event_id: `ev-${caseId}-prod-1`,
+                line_id: lineId,
+                timestamp: new Date().toISOString(),
+                quantity: 250.0,
+                environment: 'production',
+              },
+              {
+                event_id: `ev-${caseId}-stg-1`,
+                line_id: lineId,
+                timestamp: new Date().toISOString(),
+                quantity: 150.0,
+                environment: 'staging',
+              }
+            ],
+            source_note: 'Production API Gateway Access Logs',
+          });
+        } catch (uploadErr) {
+          console.warn('Initial preset evidence upload warning:', uploadErr);
+        }
+      }
+
       onCaseCreated(caseId);
       onClose();
     } catch (err) {

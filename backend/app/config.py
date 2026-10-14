@@ -28,18 +28,18 @@ class Settings(BaseSettings):
     llm_mode: str = "real"                        # "mock" for automated tests; "real" for live investigations
 
     gemini_api_key: str = ""
-    gemini_model: str = ""
+    gemini_model: str = "gemini-3.1-flash-lite"
 
     groq_api_key: str = ""
-    groq_model: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
 
     openrouter_api_key: str = ""
-    openrouter_model: str = ""
+    openrouter_model: str = "google/gemini-2.5-flash"
 
     # Two tokens map to REVIEWER and VIEWER roles.
     # In production, default tokens are strictly disallowed by validator below.
-    demo_reviewer_token: str = "demo-reviewer-token-change-me"
-    demo_viewer_token: str = "demo-viewer-token-change-me"
+    demo_reviewer_token: str = "demo-reviewer-token-2026"
+    demo_viewer_token: str = "demo-viewer-token-2026"
     # Optional multi-user tokens: "token_alice:alice@acmebilling.com,token_bob:bob@acmebilling.com"
     reviewer_tokens: str = ""
 
@@ -56,11 +56,11 @@ class Settings(BaseSettings):
         or if LLM_MODE is mock, or if no LLM provider is fully configured.
         """
         if self.environment.lower() == "production":
-            default_token = "demo-reviewer-token-change-me"
-            default_viewer = "demo-viewer-token-change-me"
+            disallowed_tokens = {"demo-reviewer-token-2026", "demo-reviewer-token-change-me"}
+            disallowed_viewers = {"demo-viewer-token-2026", "demo-viewer-token-change-me"}
             if (
-                self.demo_reviewer_token == default_token
-                or self.demo_viewer_token == default_viewer
+                self.demo_reviewer_token in disallowed_tokens
+                or self.demo_viewer_token in disallowed_viewers
                 or not self.demo_reviewer_token
                 or not self.demo_viewer_token
             ):

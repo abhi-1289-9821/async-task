@@ -24,6 +24,10 @@ export default function EvidenceModal({ isOpen, onClose, caseId, lineId, onEvide
       setSourceNote('Late-arriving customer usage reconciliation logs');
       setQuantity('400');
       setEnvironment('production');
+    } else if (type === 'amendment') {
+      setSourceNote('Contract Amendment Addendum #1 (Explicitly specifies Graduated Tiering)');
+      setQuantity('200');
+      setEnvironment('production');
     }
   };
 
@@ -32,8 +36,14 @@ export default function EvidenceModal({ isOpen, onClose, caseId, lineId, onEvide
     setLoading(true);
     setError(null);
 
+    const parsedQty = Number(quantity);
+    if (isNaN(parsedQty) || parsedQty < 0) {
+      setError('Quantity must be a valid non-negative number');
+      setLoading(false);
+      return;
+    }
+
     try {
-      const qty = parseFloat(quantity || '0');
       const eventId = `ev-${Date.now().toString().slice(-6)}`;
       
       const payload = {
@@ -43,7 +53,7 @@ export default function EvidenceModal({ isOpen, onClose, caseId, lineId, onEvide
             event_id: eventId,
             line_id: lineId || `line-${caseId}-1`,
             timestamp: new Date().toISOString(),
-            quantity: qty,
+            quantity: parsedQty,
             environment: environment,
           },
         ],
@@ -93,6 +103,9 @@ export default function EvidenceModal({ isOpen, onClose, caseId, lineId, onEvide
             </button>
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => loadPreset('reopen')}>
               🔄 Late Logs (Reopens Case)
+            </button>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => loadPreset('amendment')}>
+              📜 Contract Amendment
             </button>
           </div>
         </div>

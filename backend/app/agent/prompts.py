@@ -81,6 +81,9 @@ def build_analysis_prompt(
     contract_rules: list[dict],
     calculation_summary: dict,
     line_results: list[dict],
+    usage_events: list[dict] | None = None,
+    adjustments: list[dict] | None = None,
+    quarantined_events: list[dict] | None = None,
 ) -> str:
     """Builds the analysis prompt with untrusted data isolation."""
     sanitized_customer = _sanitize_untrusted_input(customer_name, "untrusted_customer_name")
@@ -97,13 +100,41 @@ def build_analysis_prompt(
         f"Commit: {r.get('minimum_commit_cents')}¢, Exempt: {r.get('exempt_environments')}"
         for r in contract_rules
     )
-    results_str = "\n".join(
-        f"- Result ID: {lr.get('result_id')} (DB ID: {lr.get('id')}), Line: {lr.get('line_id')}, "
-        f"Original: {lr.get('original_amount_cents')}¢, Recalculated: {lr.get('recalculated_amount_cents')}¢, "
-        f"Diff: {lr.get('difference_cents')}¢, Engine Finding: {lr.get('finding_type')}, "
-        f"Explanation: {lr.get('explanation')}"
-        for lr in line_results
-    )
+
+    results_formatted = []
+    for lr in line_results:
+        s = (
+            f"- Result ID: {lr.get('result_id')} (DB ID: {lr.get('id')}), Line: {lr.get('line_id')}, "
+            f"Original: {lr.get('original_amount_cents')}¢, Recalculated: {lr.get('recalculated_amount_cents')}¢, "
+            f"Diff: {lr.get('difference_cents')}¢, Quantity Used: {lr.get('quantity_used', 'N/A')}, "
+            f"Exempt Quantity: {lr.get('exempt_quantity', '0')}, Engine Finding: {lr.get('finding_type')}, "
+            f"Explanation: {lr.get('explanation')}"
+        )
+        interps = lr.get("interpretations") or []
+        if interps:
+            s += "\n  Competing Contract Interpretations:"
+            for it in interps:
+                if isinstance(it, dict):
+                    s += f"\n    * Interpretation '{it.get('interpretation_id')}': {it.get('recalculated_amount_cents')}¢ ({', '.join(it.get('assumptions', []))})"
+                else:
+                    s += f"\n    * Interpretation '{getattr(it, 'interpretation_id', '')}': {getattr(it, 'recalculated_amount_cents', 0)}¢"
+        results_formatted.append(s)
+    results_str = "\n".join(results_formatted)
+
+    events_str = "\n".join(
+        f"- Event ID: {e.get('id')}, Line: {e.get('line_id')}, Qty: {e.get('quantity')}, Env: {e.get('environment')}"
+        for e in (usage_events or [])
+    ) or "None provided"
+
+    adj_str = "\n".join(
+        f"- Adjustment ID: {a.get('id')}, Line: {a.get('invoice_line_id') or 'Global'}, Amount: {a.get('amount_cents')}¢, Desc: {a.get('description')}"
+        for a in (adjustments or [])
+    ) or "None"
+
+    q_str = "\n".join(
+        f"- Quarantined Event ID: {q.get('event_id')}, Reason: {q.get('reason')}"
+        for q in (quarantined_events or [])
+    ) or "None"
 
     return f"""\
 INVESTIGATION CASE:
@@ -121,6 +152,15 @@ INVOICE LINE ITEMS:
 CONTRACT RULES:
 {rules_str}
 
+USAGE TELEMETRY EVENTS:
+{events_str}
+
+QUARANTINED EVENTS:
+{q_str}
+
+DISPUTE ADJUSTMENTS:
+{adj_str}
+
 DETERMINISTIC ENGINE SUMMARY:
 - Engine Status: {calculation_summary.get('engine_status')}
 - Status Reason: {calculation_summary.get('engine_status_reason')}
@@ -134,12 +174,12 @@ DETERMINISTIC LINE RESULTS:
 Please generate an investigation analysis JSON with:
 - "finding_type": (CONFIRMED_CALCULATION_DISCREPANCY, POSSIBLE_DISCREPANCY, CONTRACT_AMBIGUITY, INSUFFICIENT_EVIDENCE, NO_DISCREPANCY, or UNRESOLVED)
 - "summary_narrative": A clear, objective explanation of what was found.
-- "verified_facts": List of proven facts from calculations and contract terms.
+- "verified_facts": List of proven facts from calculations, contract terms, and usage telemetry.
 - "possible_explanations": List of potential root causes for the discrepancy or ambiguity.
 - "assumptions": List of assumptions made during analysis.
 - "open_questions": Questions needing follow-up.
 - "missing_evidence_questions": Questions regarding missing data, if applicable.
-- "citation_ids": List of cited identifiers directly supporting this finding: including result_id strings (e.g. "res_..."), invoice line IDs, and contract rule IDs.
+- "citation_ids": List of cited identifiers directly supporting this finding: including result_id strings (e.g. "res_..."), invoice line IDs, contract rule IDs, and usage event IDs.
 - "calculation_line_result_id": Integer DB ID of the primary line result associated with this finding, or null.
 """
 

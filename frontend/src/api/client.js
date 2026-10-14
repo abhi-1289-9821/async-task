@@ -27,6 +27,9 @@ export function setActiveRole(role) {
   if (role === 'REVIEWER' || role === 'VIEWER') {
     currentRole = role;
     localStorage.setItem('billing_demo_role', role);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('roleChanged', { detail: { role } }));
+    }
   }
 }
 
@@ -36,6 +39,9 @@ export function setCustomToken(role, token) {
     localStorage.setItem('billing_reviewer_token', cleanToken);
   } else if (role === 'VIEWER') {
     localStorage.setItem('billing_viewer_token', cleanToken);
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('tokenChanged', { detail: { role, token: cleanToken } }));
   }
 }
 
@@ -68,7 +74,20 @@ async function request(endpoint, options = {}) {
   }
 
   if (!response.ok) {
-    const errorMsg = data?.reason || data?.status_reason || data?.detail || data?.message || response.statusText || 'Request failed';
+    let rawDetail = data?.reason || data?.status_reason || data?.detail || data?.message || response.statusText || 'Request failed';
+    let errorMsg = rawDetail;
+    if (Array.isArray(rawDetail)) {
+      errorMsg = rawDetail
+        .map((err) => {
+          if (typeof err === 'string') return err;
+          const loc = Array.isArray(err?.loc) ? err.loc.filter(x => x !== 'body').join('.') : '';
+          const msg = err?.msg || err?.message || JSON.stringify(err);
+          return loc ? `${loc}: ${msg}` : msg;
+        })
+        .join('; ');
+    } else if (typeof rawDetail === 'object' && rawDetail !== null) {
+      errorMsg = JSON.stringify(rawDetail);
+    }
     const error = new Error(errorMsg);
     error.status = response.status;
     error.data = data;
@@ -104,6 +123,7 @@ export const runCalculation = (caseId) => request('/api/calculations/run', {
   body: JSON.stringify({ case_id: caseId }),
 });
 export const getCalculation = (id) => request(`/api/calculations/${id}`);
+export const getCaseCalculations = (caseId) => request(`/api/calculations/case/${caseId}`);
 
 // ── Investigations (LangGraph) ──────────────────────────────────────────────
 export const triggerInvestigation = (caseId) => request(`/api/cases/${caseId}/investigations`, {

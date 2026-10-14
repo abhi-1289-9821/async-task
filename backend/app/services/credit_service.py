@@ -143,6 +143,42 @@ def approve_credit(
             detail="Finding is stale due to new evidence. Rerun investigation before approving credit.",
         )
 
+    # ── 3b. Validate Resolution Option (if supplied) ───────────────────────────
+    if resolution_option_id:
+        res_opt = (
+            db.query(ResolutionOption)
+            .filter(ResolutionOption.id == resolution_option_id)
+            .one_or_none()
+        )
+        if not res_opt:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"ResolutionOption '{resolution_option_id}' not found",
+            )
+        if res_opt.case_id != case_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"ResolutionOption '{resolution_option_id}' does not belong to case '{case_id}'",
+            )
+        if res_opt.is_stale:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"ResolutionOption '{resolution_option_id}' is stale. Rerun investigation before approving credit.",
+            )
+        if res_opt.option_type != "RECOMMEND_CREDIT":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"ResolutionOption type is '{res_opt.option_type}', expected 'RECOMMEND_CREDIT'",
+            )
+        if (
+            res_opt.calculation_line_result_id is not None
+            and res_opt.calculation_line_result_id != finding.calculation_line_result_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="ResolutionOption calculation line result does not match finding calculation line result",
+            )
+
     # Check that the LATEST human review is ACCEPT (prevent ACCEPT-then-REJECT payment bug)
     latest_review = (
         db.query(FindingReview)

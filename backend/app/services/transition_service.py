@@ -117,11 +117,14 @@ def add_evidence_and_bump_version(
 
     case.updated_at = datetime.now(timezone.utc)
 
-    # Mark existing findings for this case as stale
+    # Mark existing findings for this case as stale with explicit reason
     stale_count = (
         db.query(Finding)
         .filter(Finding.case_id == case.id, Finding.is_stale == False)  # noqa: E712
-        .update({"is_stale": True})
+        .update({
+            "is_stale": True,
+            "stale_reason": f"New evidence uploaded (evidence version bumped from {case.evidence_version - 1} to {case.evidence_version}). Investigation rerun required.",
+        })
     )
 
     # Mark existing resolution options as stale

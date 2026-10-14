@@ -88,8 +88,8 @@ export default function Navbar({ onSelectCase, activeCaseId }) {
       </div>
 
       {showTokenModal && (
-        <div className="modal-backdrop">
-          <div className="modal-card" style={{ maxWidth: '480px' }}>
+        <div className="modal-overlay" onClick={() => setShowTokenModal(false)}>
+          <div className="modal-content" style={{ maxWidth: '480px' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Key size={18} color="#38bdf8" />

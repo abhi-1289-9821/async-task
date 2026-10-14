@@ -433,6 +433,9 @@ def generate_investigation_findings(state: dict[str, Any]) -> tuple[dict[str, An
             "total_difference_cents": state.get("total_difference_cents", 0),
         },
         line_results=state.get("line_results", []),
+        usage_events=state.get("usage_events", []),
+        adjustments=state.get("adjustments", []),
+        quarantined_events=state.get("quarantined_events", []),
     )
 
     if settings.llm_mode == "mock":

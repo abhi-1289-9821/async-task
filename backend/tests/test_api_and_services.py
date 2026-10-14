@@ -970,40 +970,47 @@ class TestCreditApprovalAndConcurrencyCap:
             assert "INVESTIGATION_RUN_FAILED" in event_types
 
     def test_repeat_investigation_returns_409_if_already_running(
-        self, client_and_session
+        self, client_and_session, monkeypatch
     ):
-        """Repeat-run guard: triggers 409 if an investigation is currently in RUNNING status."""
+        """Repeat-run guard: triggers 409 through the real flow if two concurrent investigation calls occur."""
         client, SessionLocal = client_and_session
+        case_id = "case-repeat-run"
         client.post(
             "/api/cases",
             headers=REVIEWER_HEADERS,
             json={
-                "id": "case-repeat-run",
+                "id": case_id,
                 "title": "Repeat Run Test",
                 "customer_name": "Acme Inc",
                 "disputed_amount_cents": 5000,
                 "invoice_lines": [{"id": "line-rep-1", "description": "API requests", "original_amount_cents": 5000}],
+                "contract_rules": [{"id": "rule-rep-1", "line_id": "line-rep-1", "rule_type": "FLAT", "rate_cents": 5000}],
             },
         )
 
-        with SessionLocal() as db:
-            from app.models.investigation import InvestigationRun, RunStatus
-            run_obj = InvestigationRun(
-                id="run-active-123",
-                case_id="case-repeat-run",
-                evidence_version=1,
-                status=RunStatus.RUNNING,
-                status_reason="In progress",
-            )
-            db.add(run_obj)
-            db.commit()
+        from app.agent.graph import InvestigationWorkflow
+        second_call_status = {}
+        original_gather = InvestigationWorkflow.gather_evidence_node
 
-        res = client.post(
-            "/api/cases/case-repeat-run/investigations",
+        def concurrent_trigger_gather(workflow_self, state):
+            # While the first investigation is actively running in the real graph flow, fire a concurrent trigger
+            concurrent_res = client.post(
+                f"/api/cases/{case_id}/investigations",
+                headers=REVIEWER_HEADERS,
+            )
+            second_call_status["status_code"] = concurrent_res.status_code
+            second_call_status["detail"] = concurrent_res.json().get("detail", "")
+            return original_gather(workflow_self, state)
+
+        monkeypatch.setattr(InvestigationWorkflow, "gather_evidence_node", concurrent_trigger_gather)
+
+        res1 = client.post(
+            f"/api/cases/{case_id}/investigations",
             headers=REVIEWER_HEADERS,
         )
-        assert res.status_code == 409
-        assert "already currently running" in res.json()["detail"]
+        assert res1.status_code == 201
+        assert second_call_status["status_code"] == 409
+        assert "already currently running" in second_call_status["detail"]
 
     def test_case_create_rejects_nan_discount(self, client_and_session):
         """Schema validation rejects NaN or non-finite discount_pct."""

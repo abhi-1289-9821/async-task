@@ -147,7 +147,9 @@ class Finding(Base):
 
     investigation_run: Mapped["InvestigationRun"] = relationship(back_populates="findings")
     reviews: Mapped[list["FindingReview"]] = relationship(
-        back_populates="finding", cascade="all, delete-orphan"
+        back_populates="finding",
+        cascade="all, delete-orphan",
+        order_by="FindingReview.created_at.desc()",
     )
 
 

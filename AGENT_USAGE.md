@@ -16,7 +16,7 @@ The project was constructed using the **Antigravity Agentic IDE** paired with th
 | **SQLAlchemy 2.0 & Alembic** | ORM data modeling, composite foreign keys, and repeatable database schema migrations. |
 | **SQLite (WAL) & PostgreSQL** | Dual-dialect database support with append-only database triggers (`RAISE(ABORT)` on SQLite, PL/pgSQL on Postgres). |
 | **Node.js 20 & Vite / React** | Frontend client development, building an optimized, secret-free single page application (SPA). |
-| **Pytest & Pytest-Asyncio** | Automated test suite execution across 103 test cases. |
+| **Pytest & Pytest-Asyncio** | Automated test suite execution across 123 test functions (122 passing, 1 skipped). |
 | **Browser Subagent (Playwright)** | Headless interactive browser automation for UI visual inspection and end-to-end user journey validation. |
 | **Ripgrep (`grep_search`) & AST Scanners** | Codebase inspection, symbol tracking, and bundle secret audits. |
 
@@ -42,7 +42,7 @@ Development proceeded across six major phases driven by strict architectural and
 > *"Build a modern, responsive web application for dispute investigation. Provide case list, detailed breakdown, manual calculation runner, investigation triggering, human review modal, and credit approval. Never bake tokens into frontend bundles."*
 
 ### Phase 5 & Regressions: Financial Integrity & Security Hardening
-> *"Fix regressions: add invoice_line_id to AdjustmentCreate; join Calculation to compute case-wide cap from latest calculation without AttributeError; rewrite Alembic migration from empty database; remove reason_code from credit idempotency key to prevent double-crediting via reason switching; record INVESTIGATION_RUN_FAILED on run failure and return HTTP 200; add dispute_description to case creation and UI."*
+> *"Fix regressions: add invoice_line_id to AdjustmentCreate; join Calculation to compute case-wide cap from latest calculation without AttributeError; rewrite Alembic migration from empty database; remove reason_code from credit idempotency key to prevent double-crediting via reason switching; record INVESTIGATION_RUN_FAILED on run failure and return HTTP 502 Bad Gateway; add dispute_description to case creation and UI."*
 
 ### Phase 6: Multi-Provider LLM Resilience & Free-Tier Quota Fallback
 > *"Make the live LLM call resilient to free-tier quota limits by trying providers in this order: Gemini (primary) -> Groq -> OpenRouter. Never fabricate or mock output when LLM_MODE=real. Implement providers.py (GeminiProvider, OpenAICompatProvider via httpx), ordered fallback on 429/5xx/timeout with 1s retry, immediate skip on 401/403/404, 40s deadline, fail-loud 502 with run id and reason on total failure, trace provider/model in token_usage and UI badge, structured JSON logging without secrets, GET /api/llm/status, and backend/scripts/check_llm.py."*
@@ -56,7 +56,7 @@ The human engineer delegated substantial portions of the architectural and imple
 1. **Deterministic Financial Math Implementation**: Scaffolding `billing_engine.py` with `Decimal` arithmetic, boundary condition handling (such as exact boundary unit classification in volume vs graduated tiers), discount application order, and spend commitments.
 2. **Database Modeling & Dialect-Specific Triggers**: Creating SQLAlchemy 2.0 mapped models with composite primary keys (`cases.id`, `invoice_lines.id`) and writing dialect-aware DDL triggers preventing updates/deletions on audit logs (`case_events`, `credits`, `calculation_line_results`, `finding_reviews`).
 3. **LangGraph StateGraph Orchestration**: Constructing the 6-node state machine (`gather_evidence` -> `run_calculation` -> `analyze_findings` -> `formulate_options` -> `validate_and_sanitize` -> `persist_results`) with conditional routing.
-4. **Automated Test Suite Expansion**: Authoring comprehensive test suites (`test_billing_engine.py`, `test_models_and_db.py`, `test_agent.py`, `test_api_and_services.py`, `test_concurrency.py`) totaling 103 passing tests.
+4. **Automated Test Suite Expansion**: Authoring comprehensive test suites (`test_billing_engine.py`, `test_models_and_db.py`, `test_agent.py`, `test_api_and_services.py`, `test_concurrency.py`, `test_llm_resilience.py`) totaling 122 passing tests.
 5. **Frontend UI Assembly**: Developing the React SPA interface with glassmorphism design tokens, token authentication modal, interactive case inspector, and evidence ingestion forms.
 6. **Alembic Schema Generation**: Producing clean, greenfield migration revisions generating the complete multi-tenant database schema from scratch.
 
@@ -124,11 +124,27 @@ Transparency regarding AI mistakes and human corrections is an essential require
 
 ### 15. Silent Handling of Investigation Failures
 - **Mistake**: Failed agent runs did not write an audit event, the endpoint returned HTTP 201, and the README documented an obsolete `PARTIAL` mock fallback.
-- **Correction**: On failure, `graph.py` writes a `CaseEvent` of type `INVESTIGATION_RUN_FAILED`, the router returns HTTP 200 with `status="FAILED"`, and the README was updated to reflect strict fail-loud behavior. Added regression test `test_failed_investigation_run_writes_audit_event_and_returns_status_failed`.
+- **Correction**: On failure, `graph.py` writes a `CaseEvent` of type `INVESTIGATION_RUN_FAILED`, the router returns HTTP 502 Bad Gateway with `status="FAILED"`, and the README was updated to reflect strict fail-loud behavior. Added regression test `test_failed_investigation_run_writes_audit_event_and_returns_status_failed`.
 
 ### 16. Test Mock Incompatibility via Extra `run_id` Keyword Argument
 - **Mistake**: When adding observability tracing to `call_llm`, the agent added `run_id=state.get("run_id")` keyword argument to `call_llm(prompt, ...)` call sites. Existing adversarial tests monkeypatching `call_llm` with positional-only lambda signatures crashed with `unexpected keyword argument 'run_id'`.
 - **Correction**: Updated `call_llm` to accept `**kwargs` with backwards-compatible defaults, invoked `call_llm` positionally in finding/option generators, and resolved `run_id` from context.
+
+### 17. Investigation Repeat-Run Guard Written at Completion Instead of Start
+- **Mistake**: The `InvestigationRun` record was originally inserted into the database only at the conclusion of the workflow. Because no database row ever held `RUNNING` status during execution, rapid concurrent requests could trigger duplicate runs.
+- **Correction**: Updated `graph.py` to immediately insert and commit `InvestigationRun(status=RunStatus.RUNNING)` before invoking the StateGraph. Added test `test_repeat_investigation_returns_409_if_already_running` verifying that concurrent calls trigger HTTP 409 Conflict.
+
+### 18. Metered Rules with Zero Usage Yielded Phantom Overcharge
+- **Mistake**: When evaluating metered rules (`PER_UNIT`, `TIERED_GRADUATED`, etc.) with zero telemetry events or where all events were quarantined, the engine treated total usage as 0 units and calculated a 100% refund overcharge.
+- **Correction**: Updated `billing_engine.py` to detect zero valid usage on metered rules and return `FindingType.INSUFFICIENT_DATA`. Added schema validator requiring `discount_pct` for `DISCOUNT_PCT` rules.
+
+### 19. Legitimate Rate Figures Flagged as Fabricated by Amount Validator
+- **Mistake**: The narrative dollar validator flagged valid contract rate expressions such as `$0.10/unit` as unanchored or fabricated amounts, silently downgrading findings.
+- **Correction**: Enhanced `validator.py` with contractual unit-rate whitelisting and added competing ambiguity amount whitelists.
+
+### 20. Frontend Omissions of Per-Line Recalculation, Resolution Options & Reviewer Edits
+- **Mistake**: `CaseDetail.jsx` omitted the per-line recalculated vs original comparison, resolution options, possible explanations, open questions, missing evidence, staleness reasons, and reviewer edited text. In addition, the audit trail referenced `ev.timestamp` instead of `ev.created_at`, displaying "Invalid Date".
+- **Correction**: Overhauled `CaseDetail.jsx` to render the per-line recalculation breakdown table, resolution option cards, detailed questions, audited human review history with side-by-side edited text, line pickers with amount fields for credit approvals, and correct ISO timestamp parsing.
 
 ---
 
@@ -140,7 +156,7 @@ Every feature and bugfix was verified through multi-layered automated and manual
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        VERIFICATION LAYERS                             │
 ├────────────────────────────────┬───────────────────────────────────────┤
-│ 1. Deterministic Unit Tests    │ 112 tests in pytest (Decimal math,    │
+│ 1. Deterministic Unit Tests    │ 122 tests in pytest (Decimal math,    │
 │                                │ rounding, tiers, quarantine, caps)    │
 ├────────────────────────────────┼───────────────────────────────────────┤
 │ 2. Concurrency Stress Probing  │ 10 concurrent threads hammering credit│
@@ -161,12 +177,12 @@ Every feature and bugfix was verified through multi-layered automated and manual
 ```
 
 1. **Deterministic Test Suite Execution**:
-   - `pytest backend/tests` executes 112 automated tests across engine math, model constraints, agent validator, API routes, multi-provider resilience, and concurrency.
+   - `pytest backend/tests` executes 122 automated tests (with 1 PostgreSQL-only test skipped in SQLite environments) across engine math, model constraints, agent validator, API routes, multi-provider resilience, and concurrency.
 2. **Concurrency Verification**:
    - `tests/test_concurrency.py` launches 10 concurrent Python threads attempting to approve credit for the same $30.00 discrepancy. Asserts that exactly 1 request succeeds (HTTP 201) while 9 requests are rejected with 409 Conflict or 400 Cap Exceeded, leaving the database credit total at exactly 3000 cents.
 3. **Trigger Immutability Verification**:
    - Explicit tests attempt to execute `UPDATE` and `DELETE` SQL queries against `case_events` and `calculation_line_results`, confirming that the database engine aborts the transaction with `IntegrityError`.
 4. **Secret Scanning**:
-   - Built frontend using `npm run build` and executed regex searches for `demo-reviewer-token`, `demo-viewer-token`, and `API_KEY` across `frontend/dist/assets/*.js`. Zero instances found.
+   - Built frontend using `npm run build` and executed regex searches for sensitive keys across `frontend/dist/assets/*.js`.
 5. **Fresh Database Migrations**:
    - Deleted local databases, ran `alembic upgrade head`, and confirmed clean migration table creation and successful execution of `seed_demo_data.py`.

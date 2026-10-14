@@ -114,7 +114,7 @@ class ContractRule:
     rule_type: RuleType
     rate_cents: int = 0
     tiers: list[TierBand] = field(default_factory=list)
-    discount_pct: Decimal = Decimal("0")
+    discount_pct: Decimal | None = Decimal("0")
     minimum_commit_cents: int = 0
     included_units: int = 0
     overage_rate_cents: int | None = None
@@ -301,7 +301,7 @@ def _serialize_rule(r: ContractRule) -> dict[str, Any]:
             {"up_to": t.up_to, "price_per_unit_cents": int(t.price_per_unit_cents)}
             for t in (r.tiers or [])
         ],
-        "discount_pct": str(r.discount_pct),
+        "discount_pct": str(r.discount_pct) if r.discount_pct is not None else "0",
         "minimum_commit_cents": int(r.minimum_commit_cents),
         "included_units": str(r.included_units),
         "overage_rate_cents": int(r.overage_rate_cents) if r.overage_rate_cents is not None else None,
@@ -509,6 +509,12 @@ def calculate_line(
     # Engine-level input validation for discount rules
     if discount_rules:
         d_pct = discount_rules[0].discount_pct
+        if d_pct is None or not isinstance(d_pct, Decimal):
+            return _make_insufficient_data_result(
+                line, discount_rules[0].rule_id,
+                "DISCOUNT_PCT rule is missing discount percentage",
+                quarantined_all,
+            )
         if d_pct.is_nan() or d_pct.is_infinite() or d_pct < Decimal("0") or d_pct > Decimal("100"):
             return _make_insufficient_data_result(
                 line, discount_rules[0].rule_id,
@@ -558,6 +564,18 @@ def calculate_line(
             events, line.line_id, grad_rule.exempt_environments
         )
         quarantined_all.extend(q)
+        if not billable and not exempt_evs:
+            reason = (
+                "All usage events were quarantined due to validation errors; insufficient valid data to recalculate."
+                if quarantined_all
+                else "Metered pricing rule requires usage events, but no events were found for this line."
+            )
+            return _make_insufficient_data_result(
+                line=line,
+                rule_id=grad_rule.rule_id,
+                reason=reason,
+                quarantined_events=quarantined_all,
+            )
         quantity = sum((e.quantity for e in billable), Decimal("0"))
         exempt_qty = sum((e.quantity for e in exempt_evs), Decimal("0"))
 
@@ -647,6 +665,27 @@ def calculate_line(
         events, line.line_id, primary.exempt_environments
     )
     quarantined_all.extend(q)
+
+    # Metered pricing rules require valid usage evidence
+    metered_rule_types = {
+        RuleType.PER_UNIT,
+        RuleType.TIERED_GRADUATED,
+        RuleType.TIERED_VOLUME,
+        RuleType.INCLUDED_UNITS,
+    }
+    if primary.rule_type in metered_rule_types and not billable and not exempt_evs:
+        reason = (
+            "All usage events were quarantined due to validation errors; insufficient valid data to recalculate."
+            if quarantined_all
+            else "Metered pricing rule requires usage events, but no events were found for this line."
+        )
+        return _make_insufficient_data_result(
+            line=line,
+            rule_id=primary.rule_id,
+            reason=reason,
+            quarantined_events=quarantined_all,
+        )
+
     quantity    = sum((e.quantity for e in billable), Decimal("0"))
     exempt_qty  = sum((e.quantity for e in exempt_evs), Decimal("0"))
 
@@ -716,7 +755,7 @@ def calculate_line(
 
     # ── 6b. Apply discount (step 2 of rule order) ────────────────────────────
     applied_discount_pct = Decimal("0")
-    if discount_rule:
+    if discount_rule and discount_rule.discount_pct is not None:
         applied_discount_pct = discount_rule.discount_pct
         discount_amount = raw_amount * (applied_discount_pct / Decimal("100"))
         raw_amount = raw_amount - discount_amount

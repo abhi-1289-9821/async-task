@@ -54,6 +54,8 @@ class ContractRuleCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_tiers_structure(self) -> "ContractRuleCreate":
+        if self.rule_type == RuleTypeDB.DISCOUNT_PCT and self.discount_pct is None:
+            raise ValueError("DISCOUNT_PCT rule requires 'discount_pct' to be specified")
         if self.tiers is not None:
             if not self.tiers:
                 raise ValueError("Tiers list cannot be empty when provided")

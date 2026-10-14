@@ -71,6 +71,25 @@ if (savedRole === 'REVIEWER' || savedRole === 'VIEWER') {
   currentRole = savedRole;
 }
 
+// Support 1-click evaluation access via ?token=...&role=... query parameters
+if (typeof window !== 'undefined' && window.location?.search) {
+  try {
+    const searchParams = new URLSearchParams(window.location.search);
+    const paramToken = searchParams.get('token');
+    const paramRole = searchParams.get('role');
+    if (paramToken) {
+      const cleanToken = paramToken.trim();
+      const targetRole = (paramRole && paramRole.toUpperCase() === 'VIEWER') ? 'VIEWER' : 'REVIEWER';
+      setCustomToken(targetRole, cleanToken);
+      setActiveRole(targetRole);
+      const cleanUrl = window.location.pathname + window.location.hash;
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+  } catch (err) {
+    console.debug('Failed to parse URL token parameter:', err);
+  }
+}
+
 async function request(endpoint, options = {}) {
   const token = getToken(currentRole);
   const headers = {

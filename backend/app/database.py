@@ -43,10 +43,22 @@ def set_sqlite_pragmas(dbapi_conn, connection_record=None):
     cursor.close()
 
 
+def normalize_database_url(url: str) -> str:
+    """Ensures PostgreSQL URLs use standard drivers and handles Render postgres:// dialect."""
+    if not url:
+        return url
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+psycopg2://", 1)
+    if url.startswith("postgresql://") and not url.startswith("postgresql+"):
+        return url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return url
+
+
 def _make_engine():
-    if settings.database_url.startswith("sqlite"):
+    db_url = normalize_database_url(settings.database_url)
+    if db_url.startswith("sqlite"):
         engine = create_engine(
-            settings.database_url,
+            db_url,
             connect_args={"check_same_thread": False},
             echo=settings.debug,
         )
@@ -55,7 +67,7 @@ def _make_engine():
     else:
         # PostgreSQL — used on Render / Neon
         engine = create_engine(
-            settings.database_url,
+            db_url,
             pool_size=3,        # Neon free tier has low connection limits
             max_overflow=2,
             pool_pre_ping=True, # detect stale connections after cold start

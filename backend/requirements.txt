@@ -10,8 +10,9 @@ pydantic-settings>=2.6.0,<3.0.0
 # ── Database ───────────────────────────────────────────────────────────────────
 sqlalchemy>=2.0.36,<3.0.0
 alembic>=1.14.0,<2.0.0
-# psycopg2-binary is for Postgres (Neon); SQLite is stdlib, no extra package needed
+# Database drivers for PostgreSQL (psycopg 2 and psycopg 3); SQLite is stdlib
 psycopg2-binary>=2.9.9,<3.0.0
+psycopg[binary]>=3.2.0,<4.0.0
 
 # ── AI ─────────────────────────────────────────────────────────────────────────
 langgraph>=1.2.0,<2.0.0

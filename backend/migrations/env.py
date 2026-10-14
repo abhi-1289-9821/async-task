@@ -19,12 +19,12 @@ from os.path import abspath, dirname
 sys.path.insert(0, dirname(dirname(abspath(__file__))))
 
 from app.config import settings
-from app.database import Base
+from app.database import Base, normalize_database_url
 import app.models  # noqa: F401
 
 target_metadata = Base.metadata
-if not config.get_main_option("sqlalchemy.url"):
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+effective_url = config.get_main_option("sqlalchemy.url") or settings.database_url
+config.set_main_option("sqlalchemy.url", normalize_database_url(effective_url))
 
 
 def run_migrations_offline() -> None:

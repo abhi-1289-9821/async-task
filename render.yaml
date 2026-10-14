@@ -16,11 +16,11 @@ services:
       - key: LLM_MODE
         value: real
       - key: GEMINI_MODEL
-        value: gemini-3.1-flash-lite
+        value: gemini-3.5-flash-lite
       - key: LLM_PROVIDERS
         value: gemini,groq,openrouter
       - key: GROQ_MODEL
-        value: llama-3.3-70b-versatile
+        value: openai/gpt-oss-120b
       - key: OPENROUTER_MODEL
         value: google/gemini-2.5-flash
       - key: INVESTIGATION_RUN_TTL_SECONDS

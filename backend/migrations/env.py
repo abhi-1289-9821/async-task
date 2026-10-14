@@ -1,7 +1,6 @@
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import create_engine, engine_from_config, pool
 
 from alembic import context
 
@@ -23,23 +22,22 @@ from app.database import Base, normalize_database_url
 import app.models  # noqa: F401
 
 target_metadata = Base.metadata
-effective_url = config.get_main_option("sqlalchemy.url") or settings.database_url
-config.set_main_option("sqlalchemy.url", normalize_database_url(effective_url))
+
+
+def _get_target_url() -> str:
+    main_url = config.get_main_option("sqlalchemy.url")
+    if main_url and not main_url.startswith("driver://"):
+        return normalize_database_url(main_url)
+    return normalize_database_url(settings.database_url)
+
+
+target_url = _get_target_url()
+config.set_main_option("sqlalchemy.url", target_url)
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode.
-
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
-
-    """
-    url = config.get_main_option("sqlalchemy.url") or settings.database_url
+    """Run migrations in 'offline' mode."""
+    url = _get_target_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -52,19 +50,10 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode.
-
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-
-    """
-    section = config.get_section(config.config_ini_section, {}).copy()
-    effective_url = config.get_main_option("sqlalchemy.url") or settings.database_url
-    section["sqlalchemy.url"] = effective_url
-
-    connectable = engine_from_config(
-        section,
-        prefix="sqlalchemy.",
+    """Run migrations in 'online' mode."""
+    url = _get_target_url()
+    connectable = create_engine(
+        url,
         poolclass=pool.NullPool,
     )
 
@@ -81,3 +70,4 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
+

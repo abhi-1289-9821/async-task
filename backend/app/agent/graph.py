@@ -368,7 +368,8 @@ class InvestigationWorkflow:
         valid_line_ids = [l.get("id") for l in state.get("invoice_lines", []) if l.get("id")]
         valid_rule_ids = [r.get("id") for r in state.get("contract_rules", []) if r.get("id")]
         valid_usage_ids = [e.get("id") for e in state.get("usage_events", []) if e.get("id")]
-        all_valid_citations = list(set(valid_result_ids + valid_line_ids + valid_rule_ids + valid_usage_ids))
+        valid_adj_ids = [a.get("id") for a in state.get("adjustments", []) if a.get("id")]
+        all_valid_citations = list(set(valid_result_ids + valid_line_ids + valid_rule_ids + valid_usage_ids + valid_adj_ids))
 
         calc_status = state.get("calculation_status", "OK")
         total_diff = state.get("total_difference_cents", 0)
@@ -382,6 +383,9 @@ class InvestigationWorkflow:
             # Find the line result this finding is for
             lr_id = rf.get("calculation_line_result_id")
             target_lr = next((lr for lr in line_results if lr.get("id") == lr_id), None)
+            target_line_id = target_lr.get("line_id") if target_lr else (
+                state.get("invoice_lines", [{}])[0].get("id") if len(state.get("invoice_lines", [])) == 1 else None
+            )
 
             # Determine line-level engine status and line results for this finding
             finding_line_results = [target_lr] if target_lr else line_results
@@ -410,13 +414,19 @@ class InvestigationWorkflow:
                 "total_difference_cents": finding_diff,
             }
             narrative_passed, nar_errs = validator.validate_narrative_amounts(
-                sanitized_rf, finding_line_results, summary_calc, contract_rules=state.get("contract_rules", [])
+                sanitized_rf,
+                finding_line_results,
+                summary_calc,
+                contract_rules=state.get("contract_rules", []),
+                adjustments=state.get("adjustments", []),
+                case_data=state.get("case_data", {}),
             )
             if not narrative_passed or not payload_passed:
                 consist_passed = False
                 logger.warning("Validation failed: narrative=%s, payload=%s", nar_errs, p_errs)
 
             f_copy = dict(sanitized_rf)
+            f_copy["invoice_line_id"] = target_line_id
             f_copy["raw_ai_text"] = raw_model_text
             f_copy["citation_ids"] = sanitized_citations
             f_copy["citation_validation_passed"] = citation_passed
@@ -479,6 +489,7 @@ class InvestigationWorkflow:
             for so in opts_for_this_finding:
                 if finding_target_id and not so.get("calculation_line_result_id") and so.get("option_type") == "RECOMMEND_CREDIT":
                     so["calculation_line_result_id"] = finding_target_id
+                so["invoice_line_id"] = target_line_id
                 if so not in validated_options:
                     validated_options.append(so)
 
@@ -577,6 +588,7 @@ class InvestigationWorkflow:
                 id=f_id,
                 run_id=run_id,
                 case_id=state["case_id"],
+                invoice_line_id=vf.get("invoice_line_id"),
                 finding_type=AgentFindingType(vf.get("finding_type", "UNRESOLVED")),
                 narrative=vf.get("narrative") or vf.get("summary_narrative"),
                 raw_ai_text=vf.get("raw_ai_text") or vf.get("summary_narrative"),
@@ -603,6 +615,7 @@ class InvestigationWorkflow:
                 id=o_id,
                 run_id=run_id,
                 case_id=state["case_id"],
+                invoice_line_id=vo.get("invoice_line_id"),
                 option_type=OptionType(vo["option_type"]),
                 description=vo.get("description", ""),
                 calculation_line_result_id=vo.get("calculation_line_result_id"),

@@ -17,7 +17,7 @@ export default function InvestigationTab({
   setActiveTab,
 }) {
   const renderFindingCard = (f, isActive = true) => {
-    const matchingLr = calculation?.line_results?.find((lr) => lr.id === f.calculation_line_result_id);
+    const matchingLr = calculation?.line_results?.find((lr) => (f.invoice_line_id && lr.line_id === f.invoice_line_id) || (f.calculation_line_result_id && lr.id === f.calculation_line_result_id));
     const hasReviews = f.reviews && f.reviews.length > 0;
     const latestReview = hasReviews ? f.reviews[0] : null;
 
@@ -43,6 +43,11 @@ export default function InvestigationTab({
             ) : (
               <span className="badge badge-resolved" style={{ fontSize: '0.7rem' }}>
                 ✓ ACTIONABLE FINDING
+              </span>
+            )}
+            {f.invoice_line_id && (
+              <span className="font-mono" style={{ fontSize: '0.75rem', color: 'var(--ink)' }}>
+                Line: <strong>{f.invoice_line_id}</strong>
               </span>
             )}
             {f.calculation_line_result_id && (

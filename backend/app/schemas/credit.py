@@ -10,13 +10,20 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CreditCapResponse(BaseModel):
-    """Read-only cap breakdown for a given invoice line. Returned by GET /api/credits/case/{id}/cap."""
-    eligible_cents: int
-    prior_credits_cents: int
-    line_adjustments_cents: int
-    case_wide_adjustments_cents: int
+    """Authoritative cap breakdown and credit governance metrics for an invoice line."""
+    original_billed_cents: Optional[int] = None
+    recalculated_cents: Optional[int] = None
+    gross_discrepancy_cents: Optional[int] = None
+    prior_credits_cents: int = 0
+    line_adjustments_cents: int = 0
+    case_wide_adjustments_cents: int = 0
     unverified_adjustments_cents: int = 0
-    remaining_cap_cents: int
+    eligible_cents: int = 0
+    remaining_cap_cents: int = 0
+    issued_credit_cents: int = 0
+    is_eligible: bool = False
+    blocked_reason: Optional[str] = None
+    currency: str = "USD"
 
 
 class CreditApproveRequest(BaseModel):

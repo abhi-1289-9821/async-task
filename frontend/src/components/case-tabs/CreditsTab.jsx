@@ -22,23 +22,29 @@ export default function CreditsTab({
   formatCents,
 }) {
   const currentLineResult = calculation?.line_results?.find(lr => lr.line_id === selectedLineId);
-  const lineFinding = findings.find(f => f.calculation_line_result_id === currentLineResult?.id)
-    || (findings.length === 1 && !findings[0].calculation_line_result_id ? findings[0] : null);
+  const lineFinding = findings.find(f => (f.invoice_line_id && f.invoice_line_id === selectedLineId) || (currentLineResult?.id && f.calculation_line_result_id === currentLineResult.id))
+    || findings.find(f => f.invoice_line_id === selectedLineId)
+    || (findings.length === 1 && !findings[0].invoice_line_id && !findings[0].calculation_line_result_id ? findings[0] : null);
   const latestReview = lineFinding?.reviews && lineFinding.reviews.length > 0 ? lineFinding.reviews[0] : null;
   const isAcceptedFinding = latestReview?.action === 'ACCEPT';
 
+  const originalBilledCents = capInfo?.original_billed_cents ?? currentLineResult?.original_amount_cents ?? 0;
+  const recalculatedCents = capInfo?.recalculated_cents ?? currentLineResult?.recalculated_amount_cents;
+  const grossDiffCents = capInfo?.gross_discrepancy_cents ?? currentLineResult?.difference_cents;
   const eligibleOverchargeCents = capInfo?.eligible_cents ?? (currentLineResult && currentLineResult.difference_cents < 0 ? Math.abs(currentLineResult.difference_cents) : 0);
   const priorLineCreditsCents = capInfo?.prior_credits_cents ?? 0;
   const lineAdjustmentsCents = capInfo?.line_adjustments_cents ?? 0;
   const caseWideAdjustmentsCents = capInfo?.case_wide_adjustments_cents ?? 0;
   const remainingLineCapCents = capInfo?.remaining_cap_cents ?? Math.max(0, eligibleOverchargeCents - priorLineCreditsCents);
 
-  const findingLineResult = calculation?.line_results?.find(lr => lr.id === lineFinding?.calculation_line_result_id);
-  const targetFindingLineId = findingLineResult?.line_id;
+  const isInsufficient = currentLineResult?.finding_type === 'INSUFFICIENT_DATA' || grossDiffCents == null;
+  const unverifiedClaimCents = capInfo?.unverified_adjustments_cents ?? 0;
+
+  const targetFindingLineId = lineFinding?.invoice_line_id || (calculation?.line_results?.find(lr => lr.id === lineFinding?.calculation_line_result_id)?.line_id);
   const isLineMismatch = Boolean(targetFindingLineId && selectedLineId && targetFindingLineId !== selectedLineId);
 
   let disableReason = null;
-  if (!currentLineResult || currentLineResult.finding_type === 'INSUFFICIENT_DATA' || currentLineResult.difference_cents == null) {
+  if (isInsufficient) {
     disableReason = 'Evidence is insufficient — cannot propose or approve credit without verified telemetry and deterministic calculation.';
   } else if (!lineFinding) {
     disableReason = `No finding available for line ${selectedLineId}`;
@@ -52,12 +58,9 @@ export default function CreditsTab({
     disableReason = 'Remaining allowable credit cap is $0.00';
   }
 
-  const matchingOption = (resolutionOptions || []).find(o => o.calculation_line_result_id === lineFinding?.calculation_line_result_id && o.option_type === 'RECOMMEND_CREDIT')
+  const matchingOption = (resolutionOptions || []).find(o => (o.invoice_line_id === selectedLineId || o.calculation_line_result_id === lineFinding?.calculation_line_result_id) && (o.option_type === 'RECOMMEND_CREDIT' || o.option_type === 'CREDIT_UNDISPUTED_PORTION'))
     || (resolutionOptions || []).find(o => o.id === selectedResolutionOptionId)
     || (resolutionOptions || [])[0];
-
-  const isInsufficient = currentLineResult?.finding_type === 'INSUFFICIENT_DATA' || currentLineResult?.difference_cents == null;
-  const unverifiedClaimCents = capInfo?.unverified_adjustments_cents ?? 0;
 
   return (
     <div>
@@ -67,9 +70,9 @@ export default function CreditsTab({
           <span>·</span>
           <span>Credit Issuance & Governance</span>
         </div>
-        <h3 style={{ fontSize: '1.45rem', marginBottom: '0.25rem' }}>Concurrency-Safe Credit Approval</h3>
+        <h3 style={{ fontSize: '1.45rem', marginBottom: '0.25rem' }}>Authoritative Credit Governance</h3>
         <p style={{ fontSize: '0.85rem', color: 'var(--ink-secondary)', marginBottom: '1.5rem', maxWidth: 650 }}>
-          Enforces row-level database locking (SELECT FOR UPDATE) to guarantee atomic credit validation and zero double-crediting.
+          Enforces row-level database locking (SELECT FOR UPDATE) to guarantee atomic credit validation, ledger reconciliation, and zero double-crediting.
         </p>
 
         {isInsufficient && (
@@ -79,64 +82,94 @@ export default function CreditsTab({
           </div>
         )}
 
+        {/* ── 8-Metric Authoritative Governance Ledger ───────────────────── */}
         <div style={{ background: 'var(--surface-subtle)', padding: '1.25rem 1.5rem', borderRadius: 'var(--radius-md)', marginBottom: '1.75rem', border: '1px solid var(--line)' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1.25rem' }}>
+          <div style={{ fontSize: '0.78rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ink-secondary)', marginBottom: '1rem' }}>
+            Authoritative Credit Governance Ledger ({selectedLineId || 'Case'})
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '1.25rem' }}>
+            {/* 1. Original Billed Amount */}
             <div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Latest Review ({selectedLineId})</div>
-              <div style={{ fontWeight: 600, color: isAcceptedFinding ? 'var(--status-green)' : 'var(--status-rust)', marginTop: '2px' }}>
-                {isAcceptedFinding ? `✓ ${latestReview.action} by ${latestReview.reviewer}` : '✗ Must be ACCEPT'}
+              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>1. Original Billed</div>
+              <div className="font-mono" style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '1.1rem', marginTop: '2px' }}>
+                {formatCents(originalBilledCents)}
               </div>
             </div>
+
+            {/* 2. Deterministically Recalculated */}
             <div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Finding Status</div>
-              <div style={{ fontWeight: 600, color: lineFinding?.is_stale ? 'var(--status-rust)' : 'var(--status-green)', marginTop: '2px' }}>
-                {lineFinding?.is_stale ? '✗ Stale Evidence' : '✓ Fresh Non-Stale'}
+              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>2. Recalculated Amount</div>
+              <div className="font-mono" style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '1.1rem', marginTop: '2px' }}>
+                {isInsufficient ? (
+                  <span style={{ color: 'var(--status-rust)', fontSize: '0.9rem' }}>Unavailable</span>
+                ) : recalculatedCents != null ? (
+                  formatCents(recalculatedCents)
+                ) : (
+                  <span style={{ color: 'var(--status-amber)', fontSize: '0.9rem' }}>Ambiguous</span>
+                )}
               </div>
             </div>
+
+            {/* 3. Gross Calculated Discrepancy */}
             <div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Calculated Overcharge</div>
-              <div className="font-mono" style={{ fontWeight: 700, color: isInsufficient ? 'var(--status-rust)' : 'var(--ink)', fontSize: isInsufficient ? '0.95rem' : '1.1rem', marginTop: '2px' }}>
-                {isInsufficient ? 'Unavailable (Missing Evidence)' : formatCents(eligibleOverchargeCents)}
+              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>3. Gross Discrepancy</div>
+              <div className="font-mono" style={{ fontWeight: 700, color: isInsufficient ? 'var(--status-rust)' : grossDiffCents < 0 ? 'var(--status-rust)' : 'var(--status-green)', fontSize: '1.1rem', marginTop: '2px' }}>
+                {isInsufficient ? (
+                  <span style={{ fontSize: '0.9rem' }}>Uncomputed</span>
+                ) : grossDiffCents != null ? (
+                  `${grossDiffCents < 0 ? '-' : '+'}${formatCents(Math.abs(grossDiffCents))} ${grossDiffCents < 0 ? '(Overcharge)' : '(Undercharge)'}`
+                ) : (
+                  formatCents(eligibleOverchargeCents)
+                )}
               </div>
             </div>
+
+            {/* 4. Confirmed Prior Credits & Adjustments */}
             <div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Prior Confirmed Credits</div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>4. Confirmed Adjustments</div>
               <div className="font-mono" style={{ fontWeight: 700, color: 'var(--ink-muted)', fontSize: '1.1rem', marginTop: '2px' }}>
-                {formatCents(priorLineCreditsCents)}
+                {formatCents(priorLineCreditsCents + lineAdjustmentsCents + caseWideAdjustmentsCents)}
               </div>
             </div>
-            {lineAdjustmentsCents > 0 && (
-              <div>
-                <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Line Adjustments</div>
-                <div className="font-mono" style={{ fontWeight: 700, color: 'var(--status-amber)', fontSize: '1.1rem', marginTop: '2px' }}>
-                  {formatCents(lineAdjustmentsCents)}
-                </div>
-              </div>
-            )}
-            {caseWideAdjustmentsCents > 0 && (
-              <div>
-                <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Case Adjustments</div>
-                <div className="font-mono" style={{ fontWeight: 700, color: 'var(--status-amber)', fontSize: '1.1rem', marginTop: '2px' }}>
-                  {formatCents(caseWideAdjustmentsCents)}
-                </div>
-              </div>
-            )}
-            {unverifiedClaimCents > 0 && (
-              <div>
-                <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Unverified Allegations</div>
-                <div className="font-mono" style={{ fontWeight: 700, color: 'var(--status-rust)', fontSize: '1.05rem', marginTop: '2px' }}>
-                  {formatCents(unverifiedClaimCents)}
-                  <span style={{ fontSize: '0.68rem', fontWeight: 500, color: 'var(--ink-muted)', marginLeft: 4 }}>(Not deducted)</span>
-                </div>
-              </div>
-            )}
+
+            {/* 5. Potential Remaining Eligible Credit */}
             <div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Remaining Credit Cap</div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>5. Eligible Overcharge</div>
+              <div className="font-mono" style={{ fontWeight: 700, color: isInsufficient ? 'var(--status-rust)' : 'var(--ink)', fontSize: '1.1rem', marginTop: '2px' }}>
+                {isInsufficient ? '$0.00' : formatCents(eligibleOverchargeCents)}
+              </div>
+            </div>
+
+            {/* 6. Current Approval Eligibility */}
+            <div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>6. Approval Eligibility</div>
+              <div style={{ fontWeight: 600, color: (!disableReason && isAcceptedFinding) ? 'var(--status-green)' : 'var(--status-rust)', fontSize: '0.85rem', marginTop: '4px' }}>
+                {(!disableReason && isAcceptedFinding) ? '✓ Eligible for Credit' : `✗ Blocked (${isAcceptedFinding ? 'Conditions unmet' : latestReview?.action || 'Unreviewed'})`}
+              </div>
+            </div>
+
+            {/* 7. Currently Approvable Maximum (Remaining Cap) */}
+            <div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>7. Allowable Credit Cap</div>
               <div className="font-mono" style={{ fontWeight: 800, color: (!isInsufficient && remainingLineCapCents > 0) ? 'var(--status-green)' : 'var(--status-rust)', fontSize: '1.25rem', marginTop: '2px' }}>
                 {isInsufficient ? '$0.00' : formatCents(remainingLineCapCents)}
               </div>
             </div>
+
+            {/* 8. Final Issued Credit */}
+            <div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>8. Issued Credit Ledger</div>
+              <div className="font-mono" style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '1.1rem', marginTop: '2px' }}>
+                {formatCents(priorLineCreditsCents)}
+              </div>
+            </div>
           </div>
+
+          {unverifiedClaimCents > 0 && (
+            <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--line-subtle)', fontSize: '0.8rem', color: 'var(--status-rust)' }}>
+              <strong>Note on Alleged Claims:</strong> Unverified customer allegations of {formatCents(unverifiedClaimCents)} are kept separate and not counted as confirmed credits against the cap.
+            </div>
+          )}
         </div>
 
         {/* Line picker & Amount Input */}
@@ -194,6 +227,12 @@ export default function CreditsTab({
               <option value="TIER_MISMATCH">TIER_MISMATCH</option>
               <option value="EXEMPT_ENVIRONMENT_BILLED">EXEMPT_ENVIRONMENT_BILLED</option>
               <option value="GOODWILL_ADJUSTMENT">GOODWILL_ADJUSTMENT</option>
+              <option value="CALCULATION_OVERCHARGE">CALCULATION_OVERCHARGE</option>
+              <option value="CONTRACTUAL_DISCOUNT_APPLIED">CONTRACTUAL_DISCOUNT_APPLIED</option>
+              <option value="CONTRACTUAL_DISCOUNT_CORRECTION">CONTRACTUAL_DISCOUNT_CORRECTION</option>
+              <option value="MINIMUM_COMMITMENT_ADJUSTMENT">MINIMUM_COMMITMENT_ADJUSTMENT</option>
+              <option value="DUPLICATE_CHARGE_REFUND">DUPLICATE_CHARGE_REFUND</option>
+              <option value="CREDIT_UNDISPUTED_PORTION">CREDIT_UNDISPUTED_PORTION</option>
             </select>
           </div>
           <div>

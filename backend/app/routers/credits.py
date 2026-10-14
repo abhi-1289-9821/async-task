@@ -1,4 +1,4 @@
-﻿"""
+"""
 routers/credits.py
 ==================
 Endpoints for approving mock credits and viewing case credits.
@@ -15,6 +15,7 @@ from app.middleware.auth import AuthUser, get_current_user, require_reviewer
 from app.models.calculation import Calculation, CalculationLineResult
 from app.models.case import Case
 from app.models.credit import Credit
+from app.models.invoice import InvoiceLine
 from app.schemas.credit import CreditApproveRequest, CreditCapResponse, CreditResponse
 from app.services.credit_service import approve_credit, compute_remaining_cap
 
@@ -87,12 +88,21 @@ def get_credit_cap(
     if not case:
         raise HTTPException(status_code=404, detail=f"Case '{case_id}' not found")
 
+    inv_line = db.query(InvoiceLine).filter(InvoiceLine.case_id == case_id, InvoiceLine.id == invoice_line_id).first()
     empty = CreditCapResponse(
+        original_billed_cents=inv_line.original_amount_cents if inv_line else None,
+        recalculated_cents=None,
+        gross_discrepancy_cents=None,
         eligible_cents=0,
         prior_credits_cents=0,
         line_adjustments_cents=0,
         case_wide_adjustments_cents=0,
+        unverified_adjustments_cents=0,
         remaining_cap_cents=0,
+        issued_credit_cents=0,
+        is_eligible=False,
+        blocked_reason="No deterministic calculation run found for invoice line",
+        currency=case.currency if case and case.currency else "USD",
     )
 
     if calculation_line_result_id:

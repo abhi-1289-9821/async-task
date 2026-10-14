@@ -154,13 +154,13 @@ export default function EngineTab({
                   <table>
                     <thead>
                       <tr>
-                        <th>Line Item</th>
-                        <th style={{ textAlign: 'right' }}>Original Billed</th>
-                        <th style={{ textAlign: 'right' }}>Recalculated</th>
-                        <th style={{ textAlign: 'right' }}>Difference</th>
-                        <th>Classification</th>
-                        <th>Billable Units</th>
-                        <th>Engine Explanation & Slabs</th>
+                        <th style={{ minWidth: 180 }}>Line Item</th>
+                        <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Original Billed</th>
+                        <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Recalculated</th>
+                        <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Difference</th>
+                        <th style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>Classification</th>
+                        <th style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>Billable Units</th>
+                        <th style={{ minWidth: 260 }}>Engine Explanation & Slabs</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -170,31 +170,42 @@ export default function EngineTab({
                         const isUndercharge = lr.difference_cents > 0;
                         const isInsufficient = lr.finding_type === 'INSUFFICIENT_DATA';
                         const isAmbiguous = lr.finding_type === 'CONTRACT_AMBIGUITY' || (lr.interpretations && lr.interpretations.length > 0);
+                        
+                        const interpAmounts = (lr.interpretations || [])
+                          .map((i) => i.recalculated_amount_cents)
+                          .filter((v) => v != null);
+                        const minInterp = interpAmounts.length > 0 ? Math.min(...interpAmounts) : null;
+                        const maxInterp = interpAmounts.length > 0 ? Math.max(...interpAmounts) : null;
+
                         return (
                           <tr key={lr.id || lr.line_id}>
-                            <td>
+                            <td style={{ minWidth: 180 }}>
                               <div className="font-mono" style={{ fontWeight: 600, color: 'var(--ink)' }}>
                                 {lr.line_id}
                               </div>
-                              <div style={{ fontSize: '0.78rem', color: 'var(--ink-secondary)' }}>
+                              <div style={{ fontSize: '0.78rem', color: 'var(--ink-secondary)', marginTop: '1px' }}>
                                 {lineMeta?.description || 'Invoice Line'}
                               </div>
-                              <div className="font-mono" style={{ fontSize: '0.7rem', color: 'var(--ink-faint)', marginTop: '2px' }}>
+                              <div className="font-mono" style={{ fontSize: '0.68rem', color: 'var(--ink-faint)', marginTop: '2px' }}>
                                 Rule: {lr.rule_id} · Anchor: {lr.result_id}
                               </div>
                             </td>
-                            <td className="table-money-cell">
+                            <td className="table-money-cell" style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
                               {formatCents(lr.original_amount_cents)}
                             </td>
-                            <td className="table-money-cell" style={{ color: 'var(--ink)' }}>
+                            <td className="table-money-cell" style={{ whiteSpace: 'nowrap', textAlign: 'right', color: 'var(--ink)' }}>
                               {isInsufficient ? (
                                 <span style={{ color: 'var(--ink-muted)', fontStyle: 'italic', fontSize: '0.82rem' }}>
                                   — (Uncomputed)
                                 </span>
                               ) : isAmbiguous ? (
                                 <div>
-                                  <span style={{ color: 'var(--status-amber)', fontWeight: 600 }}>Ambiguous</span>
-                                  <div style={{ fontSize: '0.7rem', color: 'var(--status-amber)', fontWeight: 600, marginTop: '2px' }}>
+                                  <span style={{ color: 'var(--status-amber)', fontWeight: 600 }}>
+                                    {minInterp != null && maxInterp != null && minInterp !== maxInterp
+                                      ? `${formatCents(minInterp)} – ${formatCents(maxInterp)}`
+                                      : 'Ambiguous'}
+                                  </span>
+                                  <div style={{ fontSize: '0.68rem', color: 'var(--status-amber)', fontWeight: 600, marginTop: '1px' }}>
                                     *Human review required
                                   </div>
                                 </div>
@@ -202,64 +213,85 @@ export default function EngineTab({
                                 formatCents(lr.recalculated_amount_cents)
                               )}
                             </td>
-                            <td className="table-money-cell" style={{ color: isInsufficient ? 'var(--ink-muted)' : isOvercharge ? 'var(--status-rust)' : isUndercharge ? 'var(--status-amber)' : 'var(--status-green)' }}>
+                            <td className="table-money-cell" style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
                               {isInsufficient ? (
                                 <span style={{ color: 'var(--status-rust)', fontSize: '0.82rem', fontWeight: 600 }}>
                                   Awaiting Events
                                 </span>
+                              ) : isAmbiguous ? (
+                                <div>
+                                  {lr.undisputed_overcharge_cents > 0 ? (
+                                    <>
+                                      <span style={{ color: 'var(--status-amber)', fontWeight: 600, fontSize: '0.85rem' }}>
+                                        {formatDifference(-lr.undisputed_overcharge_cents)}
+                                      </span>
+                                      <div style={{ fontSize: '0.68rem', color: 'var(--status-amber)', fontWeight: 600, marginTop: '1px' }}>
+                                        (Undisputed min overcharge)
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span style={{ color: 'var(--status-amber)', fontWeight: 600, fontSize: '0.82rem' }}>
+                                        Ambiguous
+                                      </span>
+                                      <div style={{ fontSize: '0.68rem', color: 'var(--status-amber)', marginTop: '1px' }}>
+                                        Pending review
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
                               ) : (
-                                formatDifference(lr.difference_cents)
+                                <span style={{ color: isOvercharge ? 'var(--status-rust)' : isUndercharge ? 'var(--status-amber)' : 'var(--status-green)', fontWeight: 600 }}>
+                                  {formatDifference(lr.difference_cents)}
+                                </span>
                               )}
                             </td>
-                            <td>
+                            <td style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
                               <span className={`badge ${lr.finding_type === 'CONFIRMED_CALCULATION_DISCREPANCY' ? 'badge-stale' : lr.finding_type === 'CONTRACT_AMBIGUITY' ? 'badge-awaiting' : lr.finding_type === 'INSUFFICIENT_DATA' ? 'badge-stale' : 'badge-resolved'}`}>
                                 {lr.finding_type}
                               </span>
                             </td>
-                            <td className="font-mono" style={{ fontSize: '0.82rem' }}>
+                            <td className="font-mono" style={{ fontSize: '0.82rem', whiteSpace: 'nowrap', textAlign: 'right' }}>
                               {Number(lr.quantity_used || 0).toLocaleString()}
                               {lr.exempt_quantity > 0 && (
-                                <div style={{ fontSize: '0.7rem', color: 'var(--status-green)', marginTop: '2px' }}>
+                                <div style={{ fontSize: '0.68rem', color: 'var(--status-green)', marginTop: '1px' }}>
                                   ({Number(lr.exempt_quantity)} exempt)
                                 </div>
                               )}
                             </td>
-                            <td style={{ fontSize: '0.82rem', color: 'var(--ink-secondary)', maxWidth: '320px', lineHeight: 1.45 }}>
-                              <div>{lr.explanation}</div>
+                            <td style={{ fontSize: '0.8rem', color: 'var(--ink-secondary)', lineHeight: 1.4, minWidth: 260 }}>
+                              <div style={{ marginBottom: lr.interpretations?.length ? '0.35rem' : 0 }}>{lr.explanation}</div>
                               {lr.interpretations && lr.interpretations.length > 0 && (
-                                <div style={{ marginTop: '0.5rem', padding: '0.6rem', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', borderRadius: 'var(--radius-sm)' }}>
-                                  <div style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--status-amber)', marginBottom: '4px' }}>
-                                    ⚠ Competing Interpretations — Human Review Required:
+                                <div style={{ padding: '0.5rem 0.65rem', background: 'var(--status-amber-bg)', border: '1px solid var(--status-amber-border)', borderRadius: 'var(--radius-sm)' }}>
+                                  <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--status-amber)', marginBottom: '0.25rem' }}>
+                                    ⚠ Competing Interpretations:
                                   </div>
-                                  {lr.interpretations.map((interp, idx) => {
-                                    const diff = (interp.recalculated_amount_cents != null && lr.original_amount_cents != null)
-                                      ? (interp.recalculated_amount_cents - lr.original_amount_cents)
-                                      : null;
-                                    return (
-                                      <div key={idx} style={{ fontSize: '0.72rem', color: 'var(--ink)', marginBottom: '3px' }}>
-                                        <strong>{interp.interpretation_id || `Interp ${idx+1}`}:</strong>{' '}
-                                        <span style={{ fontWeight: 600 }}>{formatCents(interp.recalculated_amount_cents)}</span>
-                                        {diff != null && (
-                                          <span style={{ marginLeft: '4px', color: diff < 0 ? 'var(--status-rust)' : 'var(--status-green)' }}>
-                                            ({formatDifference(diff)})
-                                          </span>
-                                        )}
-                                        {interp.assumptions && interp.assumptions.length > 0 && (
-                                          <div style={{ marginTop: '2px', paddingLeft: '0.5rem', color: 'var(--ink-muted)', fontSize: '0.68rem' }}>
-                                            {interp.assumptions.map((a, ai) => <div key={ai}>• {a}</div>)}
-                                          </div>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                                    {lr.interpretations.map((interp, idx) => {
+                                      const diff = (interp.recalculated_amount_cents != null && lr.original_amount_cents != null)
+                                        ? (interp.recalculated_amount_cents - lr.original_amount_cents)
+                                        : null;
+                                      return (
+                                        <div key={idx} style={{ fontSize: '0.72rem', color: 'var(--ink)' }}>
+                                          <strong>{interp.interpretation_id || `Option ${idx+1}`}:</strong>{' '}
+                                          <span style={{ fontWeight: 600 }}>{formatCents(interp.recalculated_amount_cents)}</span>
+                                          {diff != null && (
+                                            <span style={{ marginLeft: '4px', color: diff < 0 ? 'var(--status-rust)' : 'var(--status-green)' }}>
+                                              ({formatDifference(diff)})
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
                                   {lr.undisputed_overcharge_cents > 0 && (
-                                    <div style={{ marginTop: '0.45rem', padding: '0.45rem', background: 'var(--status-teal-bg)', border: '1px solid var(--status-teal-border)', borderRadius: 'var(--radius-xs)' }}>
-                                      <div style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--status-teal)' }}>
-                                        ✓ Undisputed Minimum Overcharge: {formatCents(lr.undisputed_overcharge_cents)}
-                                      </div>
-                                      <div style={{ fontSize: '0.7rem', color: 'var(--ink-secondary)', marginTop: '2px' }}>
-                                        Billed amount exceeds highest contract interpretation. Eligible for immediate credit; remainder awaits clarification.
-                                      </div>
+                                    <div style={{ marginTop: '0.35rem', padding: '0.3rem 0.45rem', background: 'var(--status-teal-bg)', border: '1px solid var(--status-teal-border)', borderRadius: 'var(--radius-xs)', fontSize: '0.7rem' }}>
+                                      <strong style={{ color: 'var(--status-teal)' }}>
+                                        ✓ Undisputed Min Overcharge: {formatCents(lr.undisputed_overcharge_cents)}
+                                      </strong>
+                                      <span style={{ color: 'var(--ink-secondary)', marginLeft: '4px' }}>
+                                        (Eligible for credit)
+                                      </span>
                                     </div>
                                   )}
                                 </div>

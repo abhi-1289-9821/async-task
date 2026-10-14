@@ -61,13 +61,8 @@ def compute_remaining_cap(
 ) -> dict:
     """
     Computes the remaining credit cap for an invoice line.
-    Returns a dict with keys:
-      eligible_cents, prior_credits_cents, line_adjustments_cents,
-      case_wide_adjustments_cents, remaining_cap_cents.
-
-    This function is used by BOTH approve_credit (for enforcement) and
-    the GET /cap endpoint (for display), ensuring the UI and the approval
-    gate always show the same number.
+    Returns a dict with all 8 authoritative credit governance metrics.
+    Used by both approve_credit and GET /cap endpoint.
     """
     if line_result.difference_cents is None:
         eligible_overcharge = 0
@@ -131,28 +126,82 @@ def compute_remaining_cap(
             .first()
         )
         calc_id = latest_calc.id if latest_calc else line_result.calculation_id
-        total_case_overcharge = int(
-            db.query(func.coalesce(func.sum(func.abs(CalculationLineResult.difference_cents)), 0))
+        all_lrs = (
+            db.query(CalculationLineResult)
             .join(Calculation, Calculation.id == CalculationLineResult.calculation_id)
             .filter(
                 Calculation.id == calc_id,
                 Calculation.case_id == case_id,
-                CalculationLineResult.difference_cents < 0,
             )
-            .scalar()
+            .all()
         )
+        total_case_overcharge = 0
+        for lr_item in all_lrs:
+            if lr_item.difference_cents is not None and lr_item.difference_cents < 0:
+                total_case_overcharge += abs(lr_item.difference_cents)
+            elif getattr(lr_item, "undisputed_overcharge_cents", None) and lr_item.undisputed_overcharge_cents > 0:
+                total_case_overcharge += lr_item.undisputed_overcharge_cents
+
         case_cap = max(0, total_case_overcharge - all_case_credits - case_wide_adjustments)
         remaining_cap = min(line_cap, case_cap)
     else:
         remaining_cap = line_cap
 
+    case = db.query(Case).filter(Case.id == case_id).first()
+    currency = case.currency if case and case.currency else "USD"
+
+    # Evaluate approval eligibility and blocked reason
+    is_eligible = True
+    blocked_reason = None
+    lr_ft = getattr(line_result, "finding_type", None)
+    lr_ft_str = lr_ft.value if hasattr(lr_ft, "value") else str(lr_ft)
+    if lr_ft_str == "INSUFFICIENT_DATA" or line_result.difference_cents is None:
+        is_eligible = False
+        blocked_reason = "Evidence is insufficient for deterministic calculation"
+    else:
+        finding = (
+            db.query(Finding)
+            .filter(
+                Finding.case_id == case_id,
+                (Finding.invoice_line_id == invoice_line_id) | (Finding.calculation_line_result_id == line_result.id)
+            )
+            .order_by(Finding.created_at.desc(), Finding.id.desc())
+            .first()
+        )
+        if not finding:
+            is_eligible = False
+            blocked_reason = f"No finding available for line {invoice_line_id}"
+        elif finding.is_stale:
+            is_eligible = False
+            blocked_reason = "Finding is stale due to updated evidence"
+        else:
+            latest_review = (
+                db.query(FindingReview)
+                .filter(FindingReview.finding_id == finding.id)
+                .order_by(FindingReview.created_at.desc(), FindingReview.id.desc())
+                .first()
+            )
+            if not latest_review or latest_review.action != "ACCEPT":
+                is_eligible = False
+                blocked_reason = f"Latest review must be ACCEPT (currently {latest_review.action if latest_review else 'unreviewed'})"
+            elif remaining_cap <= 0:
+                is_eligible = False
+                blocked_reason = "Remaining allowable credit cap is $0.00"
+
     return {
-        "eligible_cents": eligible_overcharge,
+        "original_billed_cents": getattr(line_result, "original_amount_cents", None),
+        "recalculated_cents": getattr(line_result, "recalculated_amount_cents", None),
+        "gross_discrepancy_cents": getattr(line_result, "difference_cents", None),
         "prior_credits_cents": prior_credits,
         "line_adjustments_cents": line_adjustments,
         "case_wide_adjustments_cents": case_wide_adjustments,
         "unverified_adjustments_cents": unverified_adjustments,
+        "eligible_cents": eligible_overcharge,
         "remaining_cap_cents": remaining_cap,
+        "issued_credit_cents": prior_credits,
+        "is_eligible": is_eligible,
+        "blocked_reason": blocked_reason,
+        "currency": currency,
     }
 
 
@@ -235,6 +284,12 @@ def approve_credit(
         )
 
     # ── 3. Finding & Human Review Preconditions ─────────────────────────────────
+    if not reason_code or not reason_code.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="reason_code cannot be empty",
+        )
+
     finding = db.query(Finding).filter(Finding.id == finding_id, Finding.case_id == case_id).one_or_none()
     if not finding:
         raise HTTPException(
@@ -247,6 +302,14 @@ def approve_credit(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Finding is stale due to new evidence. Rerun investigation before approving credit.",
         )
+
+    if finding.invoice_line_id and finding.invoice_line_id != invoice_line_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Finding is for invoice line '{finding.invoice_line_id}', but credit requested for line '{invoice_line_id}'",
+        )
+    if not finding.invoice_line_id:
+        finding.invoice_line_id = invoice_line_id
 
     # Guard: A finding can only receive one credit approval
     existing_finding_credit = db.query(Credit).filter(Credit.finding_id == finding_id).first()
@@ -283,6 +346,11 @@ def approve_credit(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"ResolutionOption type is '{res_opt.option_type}', expected 'RECOMMEND_CREDIT' or 'CREDIT_UNDISPUTED_PORTION'",
+            )
+        if res_opt.invoice_line_id and res_opt.invoice_line_id != invoice_line_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"ResolutionOption is for invoice line '{res_opt.invoice_line_id}', but credit requested for line '{invoice_line_id}'",
             )
         if (
             res_opt.calculation_line_result_id is not None

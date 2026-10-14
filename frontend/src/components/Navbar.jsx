@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Eye, ShieldCheck, Activity, Key, AlertCircle, X, Trash2, Sun, Moon } from 'lucide-react';
-import { getActiveRole, setActiveRole, checkHealth, getToken, setCustomToken, hasUserSavedToken } from '../api/client';
+import { getActiveRole, setActiveRole, checkHealth, getToken, setCustomToken, hasActiveToken, hasUserSavedToken } from '../api/client';
 
 export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
   const [role, setRole] = useState(getActiveRole());
@@ -98,7 +98,7 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
     setRole((r) => r);
   };
 
-  const isTokenActive = hasUserSavedToken(role);
+  const isTokenActive = hasActiveToken(role);
 
   return (
     <header className="navbar">
@@ -108,8 +108,21 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
         onClick={() => onSelectCase(null)}
         aria-label="FairBill Home"
       >
-        <span className="brand-wordmark">FairBill</span>
-        <span className="brand-dek">Audit & Governance</span>
+        <img 
+          src="/logo.png" 
+          alt="FairBill Logo" 
+          style={{ 
+            width: 34, 
+            height: 34, 
+            borderRadius: 'var(--radius-sm)', 
+            objectFit: 'contain',
+            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+          }} 
+        />
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left' }}>
+          <span className="brand-title">FairBill</span>
+          <span className="brand-subtitle">Audit & Governance</span>
+        </div>
       </button>
 
       <div className="navbar-actions">

@@ -135,6 +135,7 @@ class Finding(Base):
     case_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    invoice_line_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     finding_type: Mapped[str] = mapped_column(
         Enum(AgentFindingType, name="agent_finding_type_enum", create_constraint=True), nullable=False
     )
@@ -212,6 +213,7 @@ class ResolutionOption(Base):
     case_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    invoice_line_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
     option_type: Mapped[str] = mapped_column(
         Enum(OptionType, name="option_type_enum", create_constraint=True), nullable=False
     )

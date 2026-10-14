@@ -343,11 +343,13 @@ def validate_narrative_amounts(
     line_results: list[dict[str, Any]],
     summary: dict[str, Any],
     contract_rules: list[dict[str, Any]] | None = None,
+    adjustments: list[dict[str, Any]] | None = None,
+    case_data: dict[str, Any] | None = None,
 ) -> tuple[bool, list[str]]:
     """
     Scans AI finding narrative, facts, and explanations for fabricated dollar amounts.
     All monetary values mentioned in the text must be anchored to numbers emitted
-    by the deterministic billing engine, contract rules, or valid rate figures.
+    by the deterministic billing engine, contract rules, case adjustments, or valid rate figures.
     """
     allowed_cents = {0}
     allowed_rate_cents = set()
@@ -385,6 +387,16 @@ def validate_narrative_amounts(
                 if t_price is not None:
                     allowed_cents.add(t_price)
                     allowed_rate_cents.add(t_price)
+
+    for adj in (adjustments or []):
+        amt = adj.get("amount_cents")
+        if amt is not None:
+            allowed_cents.add(amt)
+
+    if case_data:
+        disp_amt = case_data.get("disputed_amount_cents")
+        if disp_amt is not None:
+            allowed_cents.add(disp_amt)
 
     if summary:
         if summary.get("total_original_billed_cents") is not None:

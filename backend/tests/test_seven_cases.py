@@ -65,12 +65,14 @@ def test_case_1_acme_a_missing_evidence(clean_db):
         case_data = c_res.json()
         assert case_data["customer_name"] == "Acme A"
         assert case_data["claimed_usage_quantity"] == 1200.0
+        assert case_data["disputed_amount_cents"] == 3600  # Customer claims $36 exposure
 
         # Run calculation
         res = client.post("/api/calculations/run", json={"case_id": "case-1-acme-a"}, headers=REVIEWER_HEADERS)
         assert res.status_code == 201
         calc = res.json()
         assert calc["engine_status"] == "INSUFFICIENT_DATA"
+        # Financial values must NOT default to 0
         assert calc["total_recalculated_cents"] is None
         assert calc["total_difference_cents"] is None
 
@@ -78,6 +80,17 @@ def test_case_1_acme_a_missing_evidence(clean_db):
         line_res = calc["line_results"][0]
         assert line_res["finding_type"] == "INSUFFICIENT_DATA"
         assert line_res["recalculated_amount_cents"] is None
+
+        # Governance cap check: cannot approve credit without verified telemetry
+        cap_res = client.get(
+            "/api/credits/case/case-1-acme-a/cap?invoice_line_id=line-c1-api",
+            headers=REVIEWER_HEADERS,
+        )
+        assert cap_res.status_code == 200
+        cap = cap_res.json()
+        assert cap["remaining_cap_cents"] == 0
+        assert cap["is_eligible"] is False
+        assert "insufficient" in cap["blocked_reason"].lower()
 
 
 def test_case_2_acme_b_graduated_tiers(clean_db):
@@ -99,6 +112,19 @@ def test_case_2_acme_b_graduated_tiers(clean_db):
         assert float(line_res["quantity_used"]) == 1200.0
         assert float(line_res["exempt_quantity"]) == 200.0
 
+        # Governance cap reflects exact $275 discrepancy
+        cap_res = client.get(
+            "/api/credits/case/case-2-acme-b/cap?invoice_line_id=line-c2-api",
+            headers=REVIEWER_HEADERS,
+        )
+        assert cap_res.status_code == 200
+        cap = cap_res.json()
+        assert cap["eligible_cents"] == 27500
+        assert cap["remaining_cap_cents"] == 27500
+        assert cap["original_billed_cents"] == 95000
+        assert cap["recalculated_cents"] == 67500
+        assert cap["gross_discrepancy_cents"] == -27500
+
 
 def test_case_3_bravo_conflicting_amendments(clean_db):
     """Case 3: Distinguishes graduated schedule from volume schedule with 2 interpretations."""
@@ -117,6 +143,28 @@ def test_case_3_bravo_conflicting_amendments(clean_db):
         assert "volume" in interps
         assert interps["graduated"]["recalculated_amount_cents"] == 67500
         assert interps["volume"]["recalculated_amount_cents"] == 54000  # 1,200 * 45¢ = $540.00
+
+        # Check differences from $950 billed: $275 and $410
+        billed = line_res["original_amount_cents"]
+        diff_grad = billed - interps["graduated"]["recalculated_amount_cents"]
+        diff_vol = billed - interps["volume"]["recalculated_amount_cents"]
+        assert diff_grad == 27500
+        assert diff_vol == 41000
+        # Delta between interpretations: $135
+        assert abs(interps["graduated"]["recalculated_amount_cents"] - interps["volume"]["recalculated_amount_cents"]) == 13500
+
+        # Undisputed minimum overcharge
+        assert line_res["undisputed_overcharge_cents"] == 27500
+
+        # Cap endpoint reflects undisputed overcharge ($275.00), does not report $0 discrepancy
+        cap_res = client.get(
+            "/api/credits/case/case-3-bravo/cap?invoice_line_id=line-c3-api",
+            headers=REVIEWER_HEADERS,
+        )
+        assert cap_res.status_code == 200
+        cap = cap_res.json()
+        assert cap["eligible_cents"] == 27500
+        assert cap["remaining_cap_cents"] == 27500
 
 
 def test_case_4_delta_duplicate_fee_and_credits(clean_db):
@@ -158,6 +206,14 @@ def test_case_5_echo_included_units_and_staging(clean_db):
         assert line_res["quantity_used"] == 12500.0
         assert line_res["exempt_quantity"] == 2000.0
 
+        # Cap endpoint reflects $200.00 overcharge
+        cap_res = client.get(
+            "/api/credits/case/case-5-echo/cap?invoice_line_id=line-c5-api",
+            headers=REVIEWER_HEADERS,
+        )
+        assert cap_res.status_code == 200
+        assert cap_res.json()["remaining_cap_cents"] == 20000
+
 
 def test_case_6_foxtrot_percentage_discount(clean_db):
     """Case 6: Discount arithmetic, eligible vs excluded charges, and injection immunity."""
@@ -172,6 +228,21 @@ def test_case_6_foxtrot_percentage_discount(clean_db):
         assert calc["total_recalculated_cents"] == 200000
         assert calc["total_original_billed_cents"] == 230000
         assert calc["total_difference_cents"] == -30000
+
+        # Line-level breakdown
+        lines_by_id = {lr["line_id"]: lr for lr in calc["line_results"]}
+        assert lines_by_id["line-c6-eligible"]["recalculated_amount_cents"] == 170000
+        assert lines_by_id["line-c6-eligible"]["difference_cents"] == -30000
+        assert lines_by_id["line-c6-support"]["recalculated_amount_cents"] == 30000
+        assert lines_by_id["line-c6-support"]["difference_cents"] == 0
+
+        # Governance cap on services line is $300.00
+        cap_res = client.get(
+            "/api/credits/case/case-6-foxtrot/cap?invoice_line_id=line-c6-eligible",
+            headers=REVIEWER_HEADERS,
+        )
+        assert cap_res.status_code == 200
+        assert cap_res.json()["remaining_cap_cents"] == 30000
 
 
 def test_case_7_golf_minimum_commitment(clean_db):
@@ -190,3 +261,15 @@ def test_case_7_golf_minimum_commitment(clean_db):
         line_res = calc["line_results"][0]
         assert line_res["recalculated_amount_cents"] == 50000
         assert line_res["applied_minimum_commit_cents"] == 50000
+
+        # Check cap endpoint recognizes line-c7-metered
+        cap_res = client.get(
+            "/api/credits/case/case-7-golf/cap?invoice_line_id=line-c7-metered",
+            headers=REVIEWER_HEADERS,
+        )
+        assert cap_res.status_code == 200
+        cap = cap_res.json()
+        assert cap["remaining_cap_cents"] == 10000
+        assert cap["original_billed_cents"] == 60000
+        assert cap["recalculated_cents"] == 50000
+        assert cap["gross_discrepancy_cents"] == -10000

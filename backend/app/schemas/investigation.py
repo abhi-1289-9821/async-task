@@ -34,6 +34,7 @@ class ResolutionOptionResponse(BaseModel):
     id: str
     run_id: str
     case_id: str
+    invoice_line_id: Optional[str] = None
     option_type: str
     description: str
     calculation_line_result_id: Optional[int] = None
@@ -48,6 +49,7 @@ class FindingResponse(BaseModel):
     id: str
     case_id: str
     run_id: str
+    invoice_line_id: Optional[str] = None
     finding_type: str
     narrative: Optional[str] = None
     raw_ai_text: Optional[str] = None

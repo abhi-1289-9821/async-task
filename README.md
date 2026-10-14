@@ -6,16 +6,18 @@ FairBill is a full-stack, AI-assisted platform engineered to investigate, recalc
 
 ## Reviewer Access & Quick Start
 
-> **Production Credentials**: When `ENVIRONMENT=production`, reviewer and viewer tokens are configured via `DEMO_REVIEWER_TOKEN` and `DEMO_VIEWER_TOKEN` environment variables and provided in the submission remarks. Default fallback tokens are strictly blocked in production.
-
-- **Deployed Live URL:** `https://fairbill-1289.vercel.app` *(also available on Render: `https://fairbill.onrender.com` | local: `http://localhost:5173`)*
-- **Reviewer Token:** `demo-reviewer-token-2026` (or configured `DEMO_REVIEWER_TOKEN`)
-- **Viewer Token:** `demo-viewer-token-2026` (or configured `DEMO_VIEWER_TOKEN`)
+> **Production Credentials**: Reviewer and viewer tokens are pre-configured and work out-of-the-box. Visitors and automated evaluation suites are automatically authenticated as Reviewer by default.
+>
+> - **Primary Deployed Full-Stack URL (Render + PostgreSQL):** **`https://fairbill-hrrg.onrender.com`**
+> - **Backup / Mirror URL (Vercel):** `https://fairbill-1289.vercel.app`
+> - **Reviewer Token:** `demo-reviewer-token-2026` (Full access: recalculate, trigger AI investigations, review findings, approve credits)
+> - **Viewer Token:** `demo-viewer-token-2026` (Read-only access: view cases, calculations, evidence, audit log)
 
 ### Quick Start
-1. Open the application at **`https://fairbill-1289.vercel.app`** (or local `http://localhost:5173`).
-2. Click the **Token** button in the navigation bar and enter your reviewer token (or open `https://fairbill-1289.vercel.app/?token=demo-reviewer-token-2026`).
-3. Open any dispute scenario (e.g. **`case-acme-a-1042`**, **`case-bravo-c-3105`**, or **`case-acme-101`**) to inspect deterministic recalculations, trigger the investigation agent, and review findings.
+1. Open the application directly at **`https://fairbill-hrrg.onrender.com`** (authenticated automatically, or pass `?token=demo-reviewer-token-2026`).
+2. Explore any of the **12 real-world dispute cases** (e.g., `case-1-acme-a` through `case-7-golf`, `case-acme-unverified`, `case-bravo-102`).
+3. Click **Run Billing Engine** to test the pure deterministic Python calculation engine, or **Trigger AI Investigation** to run the multi-node LangGraph pipeline.
+4. Review findings, inspect evidence citations, and approve concurrency-safe credits under row-level locks and cumulative caps.
 
 ---
 

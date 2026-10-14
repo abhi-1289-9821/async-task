@@ -12,24 +12,18 @@ const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
 export function getToken(role = currentRole) {
   if (role === 'REVIEWER') {
     const saved = localStorage.getItem('billing_reviewer_token') || sessionStorage.getItem('billing_reviewer_token');
-    if (saved) return saved;
+    if (saved) return saved.trim();
     if (import.meta.env?.VITE_DEV_REVIEWER_TOKEN) {
-      return import.meta.env.VITE_DEV_REVIEWER_TOKEN;
+      return import.meta.env.VITE_DEV_REVIEWER_TOKEN.trim();
     }
-    if (import.meta.env?.DEV) {
-      return 'demo-reviewer-token-2026';
-    }
-    return '';
+    return 'demo-reviewer-token-2026';
   }
   const savedViewer = localStorage.getItem('billing_viewer_token') || sessionStorage.getItem('billing_viewer_token');
-  if (savedViewer) return savedViewer;
+  if (savedViewer) return savedViewer.trim();
   if (import.meta.env?.VITE_DEV_VIEWER_TOKEN) {
-    return import.meta.env.VITE_DEV_VIEWER_TOKEN;
+    return import.meta.env.VITE_DEV_VIEWER_TOKEN.trim();
   }
-  if (import.meta.env?.DEV) {
-    return 'demo-viewer-token-2026';
-  }
-  return '';
+  return 'demo-viewer-token-2026';
 }
 
 export function hasActiveToken(role = currentRole) {

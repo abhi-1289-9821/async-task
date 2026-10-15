@@ -93,18 +93,23 @@ app.add_middleware(StructuredLoggingMiddleware)
 
 # CORS configuration
 configured_origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
+default_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "https://fairbill-1289.vercel.app",
+    "https://fairbill-hrrg.onrender.com",
+]
 if not configured_origins or configured_origins == ["*"]:
-    # Fallback to local Vite dev/preview origins when unspecified, avoiding illegal wildcard + credentials combo
-    origins = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]
-    allow_credentials = True
+    origins = default_origins
 else:
-    origins = configured_origins
-    allow_credentials = True
+    origins = list(dict.fromkeys(configured_origins + default_origins))
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=allow_credentials,
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

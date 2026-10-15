@@ -5,7 +5,12 @@
  * Supports switching between REVIEWER and VIEWER demo roles with Bearer auth.
  */
 
-const API_BASE = (import.meta.env?.VITE_API_URL || '').replace(/\/$/, '');
+const API_BASE = (
+  import.meta.env?.VITE_API_URL ||
+  (typeof window !== 'undefined' && window.location.origin.includes('vercel.app')
+    ? 'https://fairbill-hrrg.onrender.com'
+    : '')
+).replace(/\/$/, '');
 
 // Tokens are strictly user-supplied or loaded from session/localStorage.
 // In dev mode only (import.meta.env.DEV), falls back to VITE_DEV_REVIEWER_TOKEN / VITE_DEV_VIEWER_TOKEN if present.

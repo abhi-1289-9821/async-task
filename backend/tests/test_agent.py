@@ -641,6 +641,8 @@ class TestTask4AgentStateAndQuarantine:
 
         monkeypatch.setattr(settings, "llm_mode", "real")
         monkeypatch.setattr(llm_client, "call_llm", mock_call_llm)
+        monkeypatch.setattr("app.routers.investigations.has_configured_provider", lambda: True)
+        monkeypatch.setattr("app.agent.providers.has_configured_provider", lambda: True)
 
         # 4. Trigger investigation
         inv_res = client.post(

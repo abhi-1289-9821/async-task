@@ -59,6 +59,14 @@ jobs:
           npm run test
           npm run build
 
+      - name: Verify Alembic Migrations & Schema Drift on Clean Postgres 16
+        env:
+          DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/test_billing
+        run: |
+          cd backend
+          alembic upgrade head
+          alembic check
+
       - name: Run Backend Test Suite (SQLite & Real PostgreSQL)
         env:
           LLM_MODE: mock

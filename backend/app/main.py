@@ -25,6 +25,7 @@ from app.routers import (
     credits_router,
     investigations_router,
     llm_router,
+    auth_router,
 )
 
 # Initialize structured JSON logging
@@ -122,6 +123,7 @@ app.include_router(findings_router)
 app.include_router(credits_router)
 app.include_router(investigations_router)
 app.include_router(llm_router)
+app.include_router(auth_router)
 
 
 @app.get("/healthz", tags=["health"])

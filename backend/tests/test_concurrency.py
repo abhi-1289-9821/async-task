@@ -112,7 +112,7 @@ def _run_concurrency_cap_assertion(SessionLocal, case_id: str, line_id: str, fin
         review = FindingReview(
             finding_id=find_id,
             action="ACCEPT",
-            reviewer="lead_auditor@acmebilling.com",
+            reviewer="lead_auditor@fairbill.io",
             original_ai_text="Overcharge eligible for credit",
         )
         db.add(review)
@@ -128,7 +128,7 @@ def _run_concurrency_cap_assertion(SessionLocal, case_id: str, line_id: str, fin
                     invoice_line_id=line_id,
                     reason_code=f"CONCURRENCY_TEST_{worker_id}",
                     finding_id=find_id,
-                    actor=f"worker_{worker_id}@acmebilling.com",
+                    actor=f"worker_{worker_id}@fairbill.io",
                 )
                 return ("SUCCESS", credit.amount_cents)
             except Exception as exc:

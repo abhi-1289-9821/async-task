@@ -161,8 +161,9 @@ async function request(endpoint, options = {}) {
   return data;
 }
 
-// ── Health ──────────────────────────────────────────────────────────────────
+// ── Health & Auth ───────────────────────────────────────────────────────────
 export const checkHealth = () => request('/healthz');
+export const getAuthMe = () => request('/api/auth/me');
 
 // ── Cases ───────────────────────────────────────────────────────────────────
 export const getCases = () => request('/api/cases');

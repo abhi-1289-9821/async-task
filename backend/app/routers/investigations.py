@@ -114,6 +114,22 @@ def trigger_investigation(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"An investigation run is already currently running for case '{case_id}'",
         )
+    except Exception as exc:
+        db.rollback()
+        # Ensure run never remains in RUNNING when an exception occurs
+        try:
+            stuck_runs = db.query(InvestigationRun).filter(
+                InvestigationRun.case_id == case_id,
+                InvestigationRun.status == RunStatus.RUNNING,
+            ).all()
+            for sr in stuck_runs:
+                sr.status = RunStatus.FAILED
+                sr.status_reason = f"Investigation failed: {exc}"
+                sr.completed_at = datetime.now(timezone.utc)
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise
     if db_run.status == RunStatus.FAILED:
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,

@@ -95,14 +95,41 @@ class TestAuthAndRoles:
         assert res.status_code == 403
 
     def test_production_environment_refuses_default_tokens(self):
-        """Proves app refuses to boot in production with guessable default demo tokens."""
+        """Proves app refuses to boot in production with guessable default demo tokens when demo_mode is False."""
         from app.config import Settings
         with pytest.raises(ValueError, match="Production Security Error"):
             Settings(
                 environment="production",
-                demo_reviewer_token="demo-reviewer-token-change-me",
-                demo_viewer_token="demo-viewer-token-change-me",
+                demo_mode=False,
+                demo_reviewer_token="demo-reviewer-token-2026",
+                demo_viewer_token="demo-viewer-token-2026",
             )
+
+    def test_auth_me_reviewer_profile(self, client_and_session):
+        client, _ = client_and_session
+        res = client.get("/api/auth/me", headers=REVIEWER_HEADERS)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["identity"] == "reviewer@fairbill.io"
+        assert data["role"] == "REVIEWER"
+        assert "approve:credits" in data["permissions"]
+        assert data["demo_mode"] is True
+
+    def test_auth_me_viewer_profile(self, client_and_session):
+        client, _ = client_and_session
+        res = client.get("/api/auth/me", headers=VIEWER_HEADERS)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["identity"] == "viewer@fairbill.io"
+        assert data["role"] == "VIEWER"
+        assert "approve:credits" not in data["permissions"]
+        assert "read:cases" in data["permissions"]
+
+    def test_demo_token_rejected_when_demo_mode_false(self, client_and_session, monkeypatch):
+        client, _ = client_and_session
+        monkeypatch.setattr(settings, "demo_mode", False)
+        res = client.get("/api/auth/me", headers={"Authorization": "Bearer demo-reviewer-token-2026"})
+        assert res.status_code == 401
 
 
 class TestStateMachineTransitions:
@@ -666,7 +693,7 @@ class TestCreditApprovalAndConcurrencyCap:
         data = r1.json()
         assert data["amount_cents"] == 3000
         assert data["reason_code"] == "RATE_ERROR"
-        assert data["approved_by"] == "reviewer@acmebilling.com"
+        assert data["approved_by"] == "reviewer@fairbill.io"
 
         # 2. Exact same request: duplicate idempotency key returns HTTP 409 Conflict
         r2 = client.post(

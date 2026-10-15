@@ -61,15 +61,29 @@ def get_current_user(
                 if secrets.compare_digest(token, tok.strip().strip('"').strip("'")):
                     return AuthUser(identity=ident.strip(), role="REVIEWER")
 
-    # Primary reviewer token check (stripped) or universal demo reviewer token
-    primary_reviewer = (settings.demo_reviewer_token or "").strip().strip('"').strip("'")
-    if (primary_reviewer and secrets.compare_digest(token, primary_reviewer)) or token == "demo-reviewer-token-2026":
-        return AuthUser(identity="reviewer@acmebilling.com", role="REVIEWER")
+    default_demo_tokens = ("demo-reviewer-token-2026", "demo-viewer-token-2026")
 
-    # Viewer token check (stripped) or universal demo viewer token
+    # Primary reviewer token check using constant-time comparison
+    primary_reviewer = (settings.demo_reviewer_token or "").strip().strip('"').strip("'")
+    if primary_reviewer:
+        if settings.demo_mode or primary_reviewer not in default_demo_tokens:
+            if secrets.compare_digest(token, primary_reviewer):
+                return AuthUser(identity="reviewer@fairbill.io", role="REVIEWER")
+
+    # When demo_mode is enabled, allow default reviewer evaluation token via constant-time comparison
+    if settings.demo_mode and secrets.compare_digest(token, "demo-reviewer-token-2026"):
+        return AuthUser(identity="reviewer@fairbill.io", role="REVIEWER")
+
+    # Primary viewer token check using constant-time comparison
     primary_viewer = (settings.demo_viewer_token or "").strip().strip('"').strip("'")
-    if (primary_viewer and secrets.compare_digest(token, primary_viewer)) or token == "demo-viewer-token-2026":
-        return AuthUser(identity="viewer@acmebilling.com", role="VIEWER")
+    if primary_viewer:
+        if settings.demo_mode or primary_viewer not in default_demo_tokens:
+            if secrets.compare_digest(token, primary_viewer):
+                return AuthUser(identity="viewer@fairbill.io", role="VIEWER")
+
+    # When demo_mode is enabled, allow default viewer evaluation token via constant-time comparison
+    if settings.demo_mode and secrets.compare_digest(token, "demo-viewer-token-2026"):
+        return AuthUser(identity="viewer@fairbill.io", role="VIEWER")
 
     # Invalid token
     raise HTTPException(

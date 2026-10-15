@@ -1,5 +1,6 @@
 from logging.config import fileConfig
 
+import sqlalchemy as sa
 from sqlalchemy import create_engine, engine_from_config, pool
 
 from alembic import context
@@ -51,10 +52,8 @@ def run_migrations_offline() -> None:
 
 def _sync_existing_database_with_alembic(connection) -> None:
     """
-    If tables were created via Base.metadata.create_all() or previous deployments
-    without Alembic tracking (i.e. alembic_version table is empty or missing),
-    automatically sync alembic_version to the appropriate revision instead of
-    attempting to recreate already-existing tables.
+    If tables were created via Base.metadata.create_all() or previous deployments,
+    ensure alembic_version contains the current head revision ('7aa7027ee786').
     """
     try:
         insp = sa.inspect(connection)
@@ -62,32 +61,19 @@ def _sync_existing_database_with_alembic(connection) -> None:
             return
 
         has_alembic = insp.has_table("alembic_version")
-        current_rev = None
-        if has_alembic:
-            row = connection.execute(sa.text("SELECT version_num FROM alembic_version")).fetchone()
-            if row and row[0]:
-                current_rev = row[0]
-
-        if current_rev:
-            return
-
-        # Database already contains tables! Inspect schema to find matching revision.
-        findings_cols = [c["name"] for c in insp.get_columns("findings")] if insp.has_table("findings") else []
-        case_cols = [c["name"] for c in insp.get_columns("cases")] if insp.has_table("cases") else []
-
-        if "invoice_line_id" in findings_cols:
-            target_rev = "c3d4e5f6a7b8"
-        elif "invoice_id" in case_cols:
-            target_rev = "c3d4e5f6a7b8"
-        elif "period_start" in case_cols:
-            target_rev = "a1b2c3d4e5f6"
-        else:
-            target_rev = "7aa7027ee786"
-
         if not has_alembic:
             connection.execute(sa.text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL, PRIMARY KEY (version_num))"))
-        connection.execute(sa.text(f"INSERT INTO alembic_version (version_num) VALUES ('{target_rev}')"))
-        connection.commit()
+            connection.execute(sa.text("INSERT INTO alembic_version (version_num) VALUES ('7aa7027ee786')"))
+            connection.commit()
+            return
+
+        row = connection.execute(sa.text("SELECT version_num FROM alembic_version")).fetchone()
+        if not row or not row[0]:
+            connection.execute(sa.text("INSERT INTO alembic_version (version_num) VALUES ('7aa7027ee786')"))
+            connection.commit()
+        elif row[0] != "7aa7027ee786":
+            connection.execute(sa.text(f"UPDATE alembic_version SET version_num = '7aa7027ee786' WHERE version_num = '{row[0]}'"))
+            connection.commit()
     except Exception:
         pass
 

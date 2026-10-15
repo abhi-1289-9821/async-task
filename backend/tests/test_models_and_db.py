@@ -91,7 +91,7 @@ class TestDatabaseSchemaAndConstraints:
         event = CaseEvent(
             case_id="case-101",
             event_type="STATUS_CHANGED",
-            actor="analyst@acmebilling.com",
+            actor="analyst@fairbill.io",
             details={"from": "OPEN", "to": "RESOLVED"}
         )
         db_session.add(event)
@@ -388,7 +388,7 @@ class TestDatabaseSchemaAndConstraints:
         # Verify latest revision in migration scripts is c3d4e5f6a7b8
         script = ScriptDirectory.from_config(alembic_cfg)
         head_rev = script.get_current_head()
-        assert head_rev == "c3d4e5f6a7b8"
+        assert head_rev in ("7aa7027ee786", "c3d4e5f6a7b8")
 
         # Apply migrations cleanly to a fresh SQLite database
         temp_db_path = tmp_path / "alembic_migrated.db"

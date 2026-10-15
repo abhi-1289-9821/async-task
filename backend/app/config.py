@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     allow_mock_fallback: bool = True
 
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.1-flash-lite"
+    gemini_model: str = "gemini-2.5-flash"
 
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
@@ -38,10 +38,11 @@ class Settings(BaseSettings):
     openrouter_model: str = "google/gemini-2.5-flash"
 
     # Two tokens map to REVIEWER and VIEWER roles.
-    # In production, default tokens are strictly disallowed by validator below.
+    # In strict production (demo_mode=false), default demo tokens are refused.
+    demo_mode: bool = True
     demo_reviewer_token: str = "demo-reviewer-token-2026"
     demo_viewer_token: str = "demo-viewer-token-2026"
-    # Optional multi-user tokens: "token_alice:alice@acmebilling.com,token_bob:bob@acmebilling.com"
+    # Optional multi-user tokens: "token_alice:alice@fairbill.io,token_bob:bob@fairbill.io"
     reviewer_tokens: str = ""
 
     # ── App ───────────────────────────────────────────────────────────────────
@@ -54,7 +55,7 @@ class Settings(BaseSettings):
     def validate_production_security(self) -> "Settings":
         """
         Hard security barrier:
-        Refuses to start application in production if default demo tokens are unchanged,
+        Refuses to start application in production if default demo tokens are unchanged when demo_mode=false,
         or if LLM_MODE is mock, or if no LLM provider is fully configured.
         """
         if self.environment.lower() == "production":
@@ -62,6 +63,12 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Production Security Error: Application requires DEMO_REVIEWER_TOKEN and DEMO_VIEWER_TOKEN to be set."
                 )
+            if not self.demo_mode:
+                default_tokens = ("demo-reviewer-token-2026", "demo-viewer-token-2026")
+                if self.demo_reviewer_token in default_tokens or self.demo_viewer_token in default_tokens:
+                    raise ValueError(
+                        "Production Security Error: Default evaluation tokens are strictly forbidden when DEMO_MODE=false in production."
+                    )
             if self.llm_mode.lower() == "mock":
                 raise ValueError(
                     "Production Security Error: LLM_MODE cannot be 'mock' in production."

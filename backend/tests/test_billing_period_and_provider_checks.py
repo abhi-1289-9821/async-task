@@ -163,17 +163,19 @@ def test_billing_period_quarantine_in_calculation_service(tmp_path, monkeypatch)
 
 def test_no_llm_provider_configured_returns_503(monkeypatch):
     """When LLM_MODE=real and no providers have keys configured, return HTTP 503."""
-    client = TestClient(app)
-    headers = {"Authorization": f"Bearer {settings.demo_reviewer_token}"}
+    from app.database import create_all_tables
+    create_all_tables()
+    with TestClient(app) as client:
+        headers = {"Authorization": f"Bearer {settings.demo_reviewer_token}"}
 
-    monkeypatch.setattr(settings, "llm_mode", "real")
-    monkeypatch.setattr(settings, "gemini_api_key", "")
-    monkeypatch.setattr(settings, "groq_api_key", "")
-    monkeypatch.setattr(settings, "openrouter_api_key", "")
+        monkeypatch.setattr(settings, "llm_mode", "real")
+        monkeypatch.setattr(settings, "gemini_api_key", "")
+        monkeypatch.setattr(settings, "groq_api_key", "")
+        monkeypatch.setattr(settings, "openrouter_api_key", "")
 
-    resp = client.post("/api/cases/case-acme-101/investigations", headers=headers)
-    assert resp.status_code == 503
-    assert "No LLM provider configured" in resp.json()["detail"]
+        resp = client.post("/api/cases/case-acme-101/investigations", headers=headers)
+        assert resp.status_code == 503
+        assert "No LLM provider configured" in resp.json()["detail"]
 
 
 def test_finding_review_ordering():

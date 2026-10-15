@@ -372,6 +372,28 @@ export default function InvestigationTab({
                 Tokens: {investigation.token_usage.total_tokens || 0}
               </span>
             )}
+            {investigation.token_usage?.provider === 'fallback_mock' && (
+              <div
+                style={{
+                  width: '100%',
+                  padding: '0.75rem 1rem',
+                  borderRadius: '8px',
+                  background: 'rgba(234, 179, 8, 0.1)',
+                  border: '1px solid rgba(234, 179, 8, 0.35)',
+                  color: 'var(--amber, #f59e0b)',
+                  fontSize: '0.825rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginTop: '0.5rem',
+                }}
+              >
+                <span style={{ fontSize: '1.1rem' }}>⚠️</span>
+                <span>
+                  <strong>Deterministic Reference Template (Not Live AI)</strong>: External LLM providers were unavailable or unconfigured. This run was synthesized using FairBill&apos;s deterministic rule engine reference template to guarantee 100% financial calculation accuracy.
+                </span>
+              </div>
+            )}
           </div>
         )}
 

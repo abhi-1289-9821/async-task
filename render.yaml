@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: billing-dispute-agent
+    name: fairbill
     runtime: python
     buildCommand: cd frontend && npm ci && npm run build && cd .. && pip install -r backend/requirements.txt
     preDeployCommand: cd backend && alembic upgrade head
@@ -16,11 +16,11 @@ services:
       - key: LLM_MODE
         value: real
       - key: GEMINI_MODEL
-        value: gemini-3.5-flash-lite
+        value: gemini-2.5-flash
       - key: LLM_PROVIDERS
         value: gemini,groq,openrouter
       - key: GROQ_MODEL
-        value: openai/gpt-oss-120b
+        value: llama-3.3-70b-versatile
       - key: OPENROUTER_MODEL
         value: google/gemini-2.5-flash
       - key: INVESTIGATION_RUN_TTL_SECONDS

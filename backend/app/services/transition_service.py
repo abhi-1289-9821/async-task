@@ -370,6 +370,20 @@ def add_rules_and_amendments_evidence(
     except (OperationalError, SQLAlchemyError) as exc:
         logger.debug("Row locking not supported or skipped: %s", exc)
 
+    # Validate supersedes_rule_id before mutating case state
+    for r in (payload.contract_rules or []):
+        if r.supersedes_rule_id:
+            existing_target = (
+                db.query(ContractRule)
+                .filter(ContractRule.case_id == case.id, ContractRule.id == r.supersedes_rule_id)
+                .first()
+            )
+            if not existing_target:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"supersedes_rule_id '{r.supersedes_rule_id}' is not an existing rule on case '{case.id}'",
+                )
+
     old_status = case.status
     case.evidence_version += 1
 

@@ -1,25 +1,25 @@
 {
   "case_id": "case-acme-101",
-  "run_id": "run_f7a6e111e3a2",
+  "run_id": "run_d761b89f2264",
   "status": "COMPLETED",
-  "timestamp": "2026-10-14T21:34:46.733204+00:00",
-  "latency_ms": 8034.13,
-  "latency_seconds": 8.034,
+  "timestamp": "2026-10-15T02:14:00.955424+00:00",
+  "latency_ms": 11294.21,
+  "latency_seconds": 11.294,
   "token_usage": {
-    "prompt_tokens": 2107,
-    "completion_tokens": 686,
-    "total_tokens": 2793,
+    "prompt_tokens": 2236,
+    "completion_tokens": 625,
+    "total_tokens": 2861,
     "provider": "gemini",
     "model": "gemini-3.5-flash-lite",
     "attempts": []
   },
   "findings": [
     {
-      "id": "fnd_d8105a8a823a",
-      "calculation_line_result_id": 19,
+      "id": "fnd_336f4088ee06",
+      "calculation_line_result_id": 178,
       "finding_type": "CONFIRMED_CALCULATION_DISCREPANCY",
-      "narrative": "Deterministic billing engine confirmed an overcharge totaling 2500\u00a2 across line item(s): line-api-calls (billed 5000\u00a2, recalculated 2500\u00a2). Discrepancy is eligible for credit approval.",
-      "raw_ai_text": "The deterministic billing engine confirms an overcharge on line item 'line-api-calls' (DB ID: 19). The customer was billed for 500 units at 10\u00a2 per unit ($50.00), totaling 5000\u00a2. However, usage telemetry records show 250 production units and 150 staging units. Contract rule 'rule-api-rate' explicitly exempts 'staging' and 'test' environments. Correct recalculation based on 250 billable production units at 10\u00a2 yields 2500\u00a2 ($25.00). After accounting for a verified prior goodwill credit of 500\u00a2 (adj-acme-1), the correct net amount is 2000\u00a2.",
+      "narrative": "The deterministic billing engine confirms that line item line-api-calls was overcharged. The original bill was 5000\u00a2 for 500 units, but usage telemetry records show 250 production units and 150 staging units. Contract rules specify that staging environments are exempt. Recalculating based on the 250 production units at 10\u00a2 per unit results in a correct charge of 2500\u00a2, indicating an overcharge of 2500\u00a2.",
+      "raw_ai_text": "The deterministic billing engine confirms that line item line-api-calls was overcharged. The original bill was 5000\u00a2 for 500 units, but usage telemetry records show 250 production units and 150 staging units. Contract rules specify that staging environments are exempt. Recalculating based on the 250 production units at 10\u00a2 per unit results in a correct charge of 2500\u00a2, indicating an overcharge of 2500\u00a2.",
       "citation_ids": [
         "res_3e75cc2c2fd9d45f",
         "line-api-calls",
@@ -29,29 +29,32 @@
         "adj-acme-1"
       ],
       "citation_validation_passed": true,
-      "consistency_check_passed": false,
+      "consistency_check_passed": true,
       "verified_facts": [
-        "Deterministic engine calculated status: CONFIRMED_CALCULATION_DISCREPANCY",
-        "Recalculation difference: -2500\u00a2"
+        "Invoice line line-api-calls was originally billed 5000\u00a2.",
+        "Usage telemetry recorded 250.0 production units under event ev-acme-prod-1.",
+        "Usage telemetry recorded 150.0 staging units under event ev-acme-stg-1.",
+        "Contract rule rule-api-rate specifies a rate of 10\u00a2 per unit with an exemption for staging and test environments.",
+        "Recalculated amount for line-api-calls is 2500\u00a2, showing a difference of -2500\u00a2.",
+        "A verified goodwill adjustment adj-acme-1 of 500\u00a2 was previously applied by the account team."
       ],
       "possible_explanations": [
-        "AI finding narrative was replaced with deterministic engine evaluation due to contradiction with engine status (CONFIRMED_CALCULATION_DISCREPANCY)."
+        "Staging environment usage was incorrectly included in the billed quantity by the billing system.",
+        "Billed quantity assumed a higher total unit count prior to applying environment exemptions."
       ],
       "missing_evidence_questions": [],
       "open_questions": [
-        "Should the verified goodwill credit of 500\u00a2 be applied against the newly recalculated total?"
+        "Should the previously applied goodwill credit of 500\u00a2 be factored into the final refund or adjustment amount?"
       ],
-      "validation_notes": [
-        "Fabricated monetary amount '2000\u00a2' (2000\u00a2) detected in AI narrative; not anchored to engine calculation"
-      ]
+      "validation_notes": []
     }
   ],
   "resolution_options": [
     {
-      "id": "opt_2393a21dc12b",
+      "id": "opt_803f45a6243e",
       "option_type": "RECOMMEND_CREDIT",
-      "description": "Deterministic engine confirmed an overcharge on line-api-calls due to incorrect billing of staging units. Recommending credit based on calculation line result ID 19.",
-      "calculation_line_result_id": 19
+      "description": "Based on the confirmed calculation discrepancy where staging units were incorrectly billed, recommend issuing a credit for the overcharged amount identified in the billing engine calculation result.",
+      "calculation_line_result_id": 178
     }
   ]
 }

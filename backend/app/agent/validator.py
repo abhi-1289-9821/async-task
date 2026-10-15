@@ -559,6 +559,21 @@ def validate_narrative_amounts(
         if amt is not None:
             allowed_cents.add(amt)
 
+    # Allow grounded net recovery cap amounts: gross discrepancy minus verified adjustments
+    total_verified_adj = sum(
+        adj.get("amount_cents", 0)
+        for adj in (adjustments or [])
+        if adj.get("is_verified") is not False
+    )
+    for lr in line_results:
+        diff = lr.get("difference_cents")
+        if diff is not None and diff < 0:
+            gross = abs(diff)
+            allowed_cents.add(max(0, gross - total_verified_adj))
+            for adj in (adjustments or []):
+                if adj.get("is_verified") is not False and adj.get("amount_cents") is not None:
+                    allowed_cents.add(max(0, gross - adj["amount_cents"]))
+
     if case_data:
         disp_amt = case_data.get("disputed_amount_cents")
         if disp_amt is not None:
@@ -571,6 +586,8 @@ def validate_narrative_amounts(
             allowed_cents.add(summary["total_recalculated_cents"])
         if summary.get("total_difference_cents") is not None:
             allowed_cents.add(abs(summary["total_difference_cents"]))
+            if summary["total_difference_cents"] < 0:
+                allowed_cents.add(max(0, abs(summary["total_difference_cents"]) - total_verified_adj))
 
     texts_to_scan = []
     if finding.get("raw_ai_text"):

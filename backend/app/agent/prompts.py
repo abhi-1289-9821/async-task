@@ -51,6 +51,9 @@ CRITICAL SECURITY AND ACCURACY RULES:
    - A root-cause hypothesis in `possible_explanations` may ONLY state a cause that is directly derivable from provided evidence.
    - If the cause cannot be determined from provided evidence, you MUST state: "Cause cannot be determined from the provided evidence".
    - You MUST NOT assert specific pricing rates, formulas, or mechanisms (e.g. "flat rate", "volume tiering") that are not explicitly present in the contract rules or events.
+7. IDENTIFIERS & PROMPT HYGIENE:
+   - Refer to line items, contract rules, and evidence using domain identifiers (e.g. line-api-calls, rule-api-rate, ev-acme-prod-1).
+   - NEVER include phrases like "DB ID" or internal relational database integer IDs in your narrative text.
 
 Your response must be valid JSON matching the requested schema.
 """
@@ -121,7 +124,7 @@ def build_analysis_prompt(
         recalc_str = f"{lr.get('recalculated_amount_cents')}¢" if lr.get('recalculated_amount_cents') is not None else "UNAVAILABLE (Missing Evidence)"
         diff_str = f"{lr.get('difference_cents')}¢" if lr.get('difference_cents') is not None else "PENDING_TELEMETRY"
         s = (
-            f"- Result ID: {lr.get('result_id')} (DB ID: {lr.get('id')}), Line: {lr.get('line_id')}, "
+            f"- Result ID: {lr.get('result_id')}, Line: {lr.get('line_id')}, "
             f"Original: {lr.get('original_amount_cents')}¢, Recalculated: {recalc_str}, "
             f"Diff: {diff_str}, Quantity Used: {lr.get('quantity_used', 'N/A')}, "
             f"Exempt Quantity: {lr.get('exempt_quantity', '0')}, Engine Finding: {lr.get('finding_type')}, "

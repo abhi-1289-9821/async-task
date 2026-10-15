@@ -1054,6 +1054,145 @@ class TestCreditApprovalAndConcurrencyCap:
         )
         assert res.status_code == 422
 
+    def test_case_create_rejects_duplicate_ids_with_422(self, client_and_session):
+        """CaseCreate must reject duplicate line, rule, event, and adjustment IDs with 422."""
+        client, _ = client_and_session
+
+        # Duplicate line IDs
+        res = client.post(
+            "/api/cases",
+            headers=REVIEWER_HEADERS,
+            json={
+                "id": "case-dup-lines",
+                "title": "Duplicate Lines",
+                "customer_name": "Test Co",
+                "disputed_amount_cents": 1000,
+                "invoice_lines": [
+                    {"id": "line-dup-1", "description": "L1", "original_amount_cents": 500},
+                    {"id": "line-dup-1", "description": "L2", "original_amount_cents": 500},
+                ],
+            },
+        )
+        assert res.status_code == 422
+        assert "Duplicate invoice line id" in str(res.json())
+
+        # Duplicate rule IDs
+        res = client.post(
+            "/api/cases",
+            headers=REVIEWER_HEADERS,
+            json={
+                "id": "case-dup-rules",
+                "title": "Duplicate Rules",
+                "customer_name": "Test Co",
+                "disputed_amount_cents": 1000,
+                "invoice_lines": [
+                    {"id": "line-1", "description": "L1", "original_amount_cents": 500},
+                    {"id": "line-2", "description": "L2", "original_amount_cents": 500},
+                ],
+                "contract_rules": [
+                    {"id": "rule-dup-1", "line_id": "line-1", "rule_type": "FLAT", "rate_cents": 500},
+                    {"id": "rule-dup-1", "line_id": "line-2", "rule_type": "FLAT", "rate_cents": 500},
+                ],
+            },
+        )
+        assert res.status_code == 422
+        assert "Duplicate contract rule id" in str(res.json())
+
+        # Duplicate adjustment IDs
+        res = client.post(
+            "/api/cases",
+            headers=REVIEWER_HEADERS,
+            json={
+                "id": "case-dup-adjs",
+                "title": "Duplicate Adjustments",
+                "customer_name": "Test Co",
+                "disputed_amount_cents": 1000,
+                "invoice_lines": [
+                    {"id": "line-1", "description": "L1", "original_amount_cents": 1000},
+                ],
+                "adjustments": [
+                    {"id": "adj-dup-1", "invoice_line_id": "line-1", "amount_cents": 100, "description": "A1"},
+                    {"id": "adj-dup-1", "invoice_line_id": "line-1", "amount_cents": 200, "description": "A2"},
+                ],
+            },
+        )
+        assert res.status_code == 422
+        assert "Duplicate adjustment id" in str(res.json())
+
+        # Duplicate usage event IDs
+        res = client.post(
+            "/api/cases",
+            headers=REVIEWER_HEADERS,
+            json={
+                "id": "case-dup-events",
+                "title": "Duplicate Events",
+                "customer_name": "Test Co",
+                "disputed_amount_cents": 1000,
+                "invoice_lines": [
+                    {"id": "line-1", "description": "L1", "original_amount_cents": 1000},
+                ],
+                "usage_events": [
+                    {"id": "ev-dup-1", "line_id": "line-1", "quantity": 10.0},
+                    {"id": "ev-dup-1", "line_id": "line-1", "quantity": 20.0},
+                ],
+            },
+        )
+        assert res.status_code == 422
+        assert "Duplicate usage event id" in str(res.json())
+
+    def test_superseding_nonexistent_rule_returns_422(self, client_and_session):
+        """Uploading a rule with supersedes_rule_id that does not exist on case must return 422."""
+        client, _ = client_and_session
+        case_id = "case-supersede-422"
+        client.post(
+            "/api/cases",
+            headers=REVIEWER_HEADERS,
+            json={
+                "id": case_id,
+                "title": "Supersede Test",
+                "customer_name": "Test Co",
+                "disputed_amount_cents": 1000,
+                "invoice_lines": [{"id": "line-1", "description": "L1", "original_amount_cents": 1000}],
+                "contract_rules": [{"id": "rule-orig-1", "line_id": "line-1", "rule_type": "FLAT", "rate_cents": 1000}],
+            },
+        )
+
+        res = client.post(
+            f"/api/cases/{case_id}/evidence/rules",
+            headers=REVIEWER_HEADERS,
+            json={
+                "contract_rules": [
+                    {
+                        "id": "rule-amend-1",
+                        "line_id": "line-1",
+                        "rule_type": "FLAT",
+                        "rate_cents": 800,
+                        "supersedes_rule_id": "non-existent-rule-id",
+                    }
+                ]
+            },
+        )
+        assert res.status_code == 422
+        assert "supersedes_rule_id" in str(res.json())
+
+    def test_cents_overflow_upper_bound_returns_422(self, client_and_session):
+        """Disputed amount or cents fields exceeding 10**9 ($10M) must be rejected with 422."""
+        client, _ = client_and_session
+        res = client.post(
+            "/api/cases",
+            headers=REVIEWER_HEADERS,
+            json={
+                "id": "case-overflow",
+                "title": "Overflow Test",
+                "customer_name": "Test Co",
+                "disputed_amount_cents": 10**15,
+                "invoice_lines": [{"id": "line-1", "description": "L1", "original_amount_cents": 1000}],
+            },
+        )
+        assert res.status_code == 422
+        assert "less_than_equal" in str(res.json()) or "1000000000" in str(res.json())
+
+
 
 
 

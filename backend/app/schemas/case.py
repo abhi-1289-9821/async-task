@@ -20,8 +20,8 @@ class TierBandSchema(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     up_to: Optional[int] = Field(None, ge=1)
-    price_per_unit_cents: Optional[int] = Field(None, ge=0)
-    rate_cents: Optional[int] = Field(None, ge=0)
+    price_per_unit_cents: Optional[int] = Field(None, ge=0, le=10**9)
+    rate_cents: Optional[int] = Field(None, ge=0, le=10**9)
 
     @model_validator(mode="after")
     def validate_price(self) -> "TierBandSchema":
@@ -37,19 +37,19 @@ class TierBandSchema(BaseModel):
 class InvoiceLineCreate(BaseModel):
     id: str = Field(..., min_length=1, max_length=36)
     description: str = Field(..., min_length=1, max_length=255)
-    original_amount_cents: int = Field(..., ge=0)
+    original_amount_cents: int = Field(..., ge=0, le=10**9)
 
 
 class ContractRuleCreate(BaseModel):
     id: str = Field(..., min_length=1, max_length=36)
     line_id: str = Field(..., min_length=1, max_length=36)
     rule_type: RuleTypeDB
-    rate_cents: int = Field(0, ge=0)
+    rate_cents: int = Field(0, ge=0, le=10**9)
     tiers: Optional[list[TierBandSchema]] = None
     discount_pct: Optional[float] = Field(None, ge=0.0, le=100.0, allow_inf_nan=False)
-    minimum_commit_cents: int = Field(0, ge=0)
+    minimum_commit_cents: int = Field(0, ge=0, le=10**9)
     included_units: int = Field(0, ge=0)
-    overage_rate_cents: Optional[int] = Field(None, ge=0)
+    overage_rate_cents: Optional[int] = Field(None, ge=0, le=10**9)
     exempt_environments: Optional[list[str]] = None
     supersedes_rule_id: Optional[str] = Field(None, max_length=36)
 
@@ -78,7 +78,7 @@ class ContractRuleCreate(BaseModel):
 class AdjustmentCreate(BaseModel):
     id: str = Field(..., min_length=1, max_length=36)
     invoice_line_id: Optional[str] = Field(None, min_length=1, max_length=36)
-    amount_cents: int = Field(..., ge=0)
+    amount_cents: int = Field(..., ge=0, le=10**9)
     description: str = Field(..., min_length=1)
     applied_at: Optional[datetime] = None
     is_verified: bool = True
@@ -102,7 +102,7 @@ class CaseCreate(BaseModel):
     claimed_usage_quantity: Optional[float] = Field(None, ge=0)
     claimed_usage_uom: Optional[str] = Field(None, max_length=50)
     evidence_source: Optional[str] = Field(None, max_length=255)
-    disputed_amount_cents: int = Field(..., ge=0)
+    disputed_amount_cents: int = Field(..., ge=0, le=10**9)
     dispute_description: Optional[str] = Field(None, max_length=5000)
     period_start: Optional[datetime] = None
     period_end: Optional[datetime] = None
@@ -115,19 +115,52 @@ class CaseCreate(BaseModel):
     def validate_case_references(self) -> "CaseCreate":
         if self.period_start and self.period_end and self.period_start > self.period_end:
             raise ValueError("Billing period start date must be before or equal to end date")
-        line_ids = {l.id for l in self.invoice_lines}
+
+        # Reject duplicate invoice line IDs
+        seen_line_ids = set()
+        for l in self.invoice_lines:
+            if l.id in seen_line_ids:
+                raise ValueError(f"Duplicate invoice line id '{l.id}' in payload")
+            seen_line_ids.add(l.id)
+
+        # Reject duplicate contract rule IDs
+        seen_rule_ids = set()
         for r in self.contract_rules:
-            if r.line_id not in line_ids:
+            if r.id in seen_rule_ids:
+                raise ValueError(f"Duplicate contract rule id '{r.id}' in payload")
+            seen_rule_ids.add(r.id)
+
+        # Reject duplicate adjustment IDs
+        seen_adj_ids = set()
+        for adj in self.adjustments:
+            if adj.id in seen_adj_ids:
+                raise ValueError(f"Duplicate adjustment id '{adj.id}' in payload")
+            seen_adj_ids.add(adj.id)
+
+        # Reject duplicate usage event IDs (when non-empty id provided)
+        seen_event_ids = set()
+        for ev in self.usage_events:
+            if ev.id:
+                if ev.id in seen_event_ids:
+                    raise ValueError(f"Duplicate usage event id '{ev.id}' in payload")
+                seen_event_ids.add(ev.id)
+
+        for r in self.contract_rules:
+            if r.line_id not in seen_line_ids:
                 raise ValueError(
                     f"Contract rule '{r.id}' references line_id '{r.line_id}' which does not exist in invoice_lines"
                 )
+            if r.supersedes_rule_id and r.supersedes_rule_id not in seen_rule_ids:
+                raise ValueError(
+                    f"Contract rule '{r.id}' supersedes rule '{r.supersedes_rule_id}' which does not exist on this case"
+                )
         for adj in self.adjustments:
-            if adj.invoice_line_id is not None and adj.invoice_line_id not in line_ids:
+            if adj.invoice_line_id is not None and adj.invoice_line_id not in seen_line_ids:
                 raise ValueError(
                     f"Adjustment '{adj.id}' references invoice_line_id '{adj.invoice_line_id}' which does not exist in invoice_lines"
                 )
         for ev in self.usage_events:
-            if ev.line_id not in line_ids:
+            if ev.line_id not in seen_line_ids:
                 raise ValueError(
                     f"Usage event '{ev.id or 'new'}' references line_id '{ev.line_id}' which does not exist in invoice_lines"
                 )

@@ -454,8 +454,8 @@ def generate_investigation_findings(
     if target_lr:
         prompt += (
             f"\nTARGET INVOICE LINE FOR THIS FINDING:\n"
-            f"Focus your finding specifically on line '{target_lr.get('line_id')}' (DB ID: {target_lr.get('id')}, Result ID: {target_lr.get('result_id')}). "
-            f"Set calculation_line_result_id to {target_lr.get('id')}.\n"
+            f"Focus your finding specifically on line '{target_lr.get('line_id')}' (Result ID: {target_lr.get('result_id')}). "
+            f"Set calculation_line_result_id to {target_lr.get('id')}. Do not include internal database ID numbers in narrative text.\n"
         )
 
     if settings.llm_mode == "mock":

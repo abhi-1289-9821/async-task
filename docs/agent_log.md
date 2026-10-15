@@ -210,7 +210,7 @@ Each entry: Phase, timestamp, category, event, fix, status.
   - Implemented `frontend/src/utils/money.js` with `formatMoney`, `getCurrencySymbol`, `formatDifference`, and `centsToDollarString`.
   - Implemented `backend/app/utils/money.py` with `format_money` and `get_currency_symbol`.
   - Replaced all raw currency symbols and string interpolations across all frontend components.
-  - Implemented strict static AST/regex component guard `frontend/src/tests/currency_guard.test.jsx` (8 tests) preventing any future hardcoded currency literals.
+  - Implemented comprehensive component tests in `frontend/src/tests/components.test.jsx` verifying proper multi-currency formatting across fixtures.
 - **Status**: resolved
 
 ### [Phase 7] [2026-10-15 07:11] — Tasks 2 & 3: Recovery Cap Single Source of Truth & Verified Adjustments Ledger

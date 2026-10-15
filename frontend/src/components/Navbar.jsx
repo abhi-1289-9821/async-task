@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Eye, ShieldCheck, Activity, Key, AlertCircle, X, Trash2, Sun, Moon } from 'lucide-react';
-import { getActiveRole, setActiveRole, checkHealth, getToken, setCustomToken, hasActiveToken } from '../api/client';
+import { getActiveRole, setActiveRole, checkHealth, getToken, setCustomToken, hasActiveToken, isDemoMode } from '../api/client';
 
 export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
   const [role, setRole] = useState(getActiveRole());
@@ -38,7 +38,7 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
       .catch(() => setIsHealthy(false));
 
     const handleAuthError = () => {
-      const defaultTok = role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026';
+      const defaultTok = isDemoMode ? (role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026') : '';
       setAuthRequiredPrompt(true);
       setShowTokenModal(true);
       setTokenInput(getToken(role) || defaultTok);
@@ -84,13 +84,13 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
   };
 
   const openTokenModal = () => {
-    const defaultTok = role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026';
+    const defaultTok = isDemoMode ? (role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026') : '';
     setTokenInput(getToken(role) || defaultTok);
     setShowTokenModal(true);
   };
 
   const handleSaveToken = () => {
-    const defaultTok = role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026';
+    const defaultTok = isDemoMode ? (role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026') : '';
     const effectiveToken = (tokenInput || '').trim() || defaultTok;
     setCustomToken(role, effectiveToken);
     setShowTokenModal(false);
@@ -247,23 +247,25 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label htmlFor="personal-bearer-token-input" className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>Personal Bearer Token</span>
-                  <button
-                    type="button"
-                    style={{
-                      background: 'rgba(56, 189, 248, 0.12)',
-                      border: '1px solid rgba(56, 189, 248, 0.35)',
-                      borderRadius: '4px',
-                      color: 'var(--accent-cyan)',
-                      fontSize: '0.72rem',
-                      fontWeight: 500,
-                      padding: '0.15rem 0.5rem',
-                      cursor: 'pointer'
-                    }}
-                    onClick={() => setTokenInput(role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026')}
-                    title="Click to insert default demo token"
-                  >
-                    Click to Use Default: {role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026'}
-                  </button>
+                  {isDemoMode && (
+                    <button
+                      type="button"
+                      style={{
+                        background: 'rgba(56, 189, 248, 0.12)',
+                        border: '1px solid rgba(56, 189, 248, 0.35)',
+                        borderRadius: '4px',
+                        color: 'var(--accent-cyan)',
+                        fontSize: '0.72rem',
+                        fontWeight: 500,
+                        padding: '0.15rem 0.5rem',
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => setTokenInput(role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026')}
+                      title="Click to insert default demo token"
+                    >
+                      Click to Use Default: {role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026'}
+                    </button>
+                  )}
                 </label>
                 <div style={{ position: 'relative' }}>
                   <input
@@ -323,22 +325,24 @@ export default function Navbar({ onSelectCase, activeCaseId: _activeCaseId }) {
                   <Trash2 size={13} />
                   <span>Clear</span>
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  style={{
-                    fontSize: '0.8rem',
-                    padding: '0.5rem 0.85rem',
-                    color: 'var(--accent-cyan)',
-                    borderColor: 'rgba(56, 189, 248, 0.3)'
-                  }}
-                  onClick={() => {
-                    const defTok = role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026';
-                    setTokenInput(defTok);
-                  }}
-                >
-                  Fill Default
-                </button>
+                {isDemoMode && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{
+                      fontSize: '0.8rem',
+                      padding: '0.5rem 0.85rem',
+                      color: 'var(--accent-cyan)',
+                      borderColor: 'rgba(56, 189, 248, 0.3)'
+                    }}
+                    onClick={() => {
+                      const defTok = role === 'REVIEWER' ? 'demo-reviewer-token-2026' : 'demo-viewer-token-2026';
+                      setTokenInput(defTok);
+                    }}
+                  >
+                    Fill Default
+                  </button>
+                )}
               </div>
               <div className="modal-footer-end">
                 <button

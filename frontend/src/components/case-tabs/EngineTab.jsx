@@ -1,14 +1,20 @@
 import React from 'react';
 import { Play, AlertCircle } from 'lucide-react';
+import { formatMoney, formatDifference as defaultFormatDifference } from '../../utils/money';
 
 export default function EngineTab({
   calculation,
   caseData,
+  currency: propCurrency,
+  capLedger,
   handleRunCalculation,
   actionLoading,
   formatCents,
   formatDifference,
 }) {
+  const currency = propCurrency || caseData?.currency || 'USD';
+  const format = (cents) => (formatCents ? formatCents(cents, currency) : formatMoney(cents, currency));
+  const formatDiff = (diff) => (formatDifference ? formatDifference(diff, currency) : defaultFormatDifference(diff, currency));
   return (
     <div>
       <div className="card" style={{ padding: '2rem', marginBottom: '2rem' }}>
@@ -42,7 +48,7 @@ export default function EngineTab({
               <div>
                 <div className="recalc-col-label">Original Billed Amount</div>
                 <div className="recalc-col-value">
-                  {formatCents(calculation.total_original_billed_cents)}
+                  {format(calculation.total_original_billed_cents)}
                 </div>
               </div>
               <div>
@@ -57,7 +63,7 @@ export default function EngineTab({
                       Ambiguous
                     </span>
                   ) : (
-                    formatCents(calculation.total_recalculated_cents)
+                    format(calculation.total_recalculated_cents)
                   )}
                 </div>
               </div>
@@ -66,34 +72,10 @@ export default function EngineTab({
                   <span style={{ fontSize: '0.8rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                     Calculated Discrepancy:
                   </span>{' '}
-                  {calculation.engine_status === 'INSUFFICIENT_DATA' ? (
-                    <>
-                      <strong style={{ 
-                        fontSize: '1.15rem', 
-                        fontFamily: 'var(--font-serif)', 
-                        color: 'var(--status-rust)',
-                        marginRight: '0.4rem'
-                      }}>
-                        Awaiting Evidence
-                      </strong>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--status-rust)' }}>
-                        (Telemetry events required)
-                      </span>
-                    </>
-                  ) : calculation.engine_status === 'AMBIGUOUS' ? (
-                    <>
-                      <strong style={{ 
-                        fontSize: '1.15rem', 
-                        fontFamily: 'var(--font-serif)', 
-                        color: 'var(--status-amber)',
-                        marginRight: '0.4rem'
-                      }}>
-                        Multiple Interpretations
-                      </strong>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--status-amber)' }}>
-                        (Contract clauses conflict)
-                      </span>
-                    </>
+                  {calculation.total_difference_cents === null ? (
+                    <span style={{ color: 'var(--ink-muted)', fontStyle: 'italic', fontSize: '0.9rem' }}>
+                      Pending valid pricing & telemetry
+                    </span>
                   ) : (
                     <>
                       <strong style={{ 
@@ -103,7 +85,7 @@ export default function EngineTab({
                         color: calculation.total_difference_cents < 0 ? 'var(--status-rust)' : calculation.total_difference_cents > 0 ? 'var(--status-amber)' : 'var(--status-green)',
                         marginRight: '0.4rem'
                       }}>
-                        {formatDifference(calculation.total_difference_cents)}
+                        {formatDiff(calculation.total_difference_cents)}
                       </strong>
                       <span style={{ fontSize: '0.8rem', fontWeight: 600, color: calculation.total_difference_cents < 0 ? 'var(--status-rust)' : 'var(--status-green)' }}>
                         {calculation.total_difference_cents < 0 ? '(Overcharge)' : calculation.total_difference_cents > 0 ? '(Undercharge)' : '(Exact match)'}
@@ -117,26 +99,52 @@ export default function EngineTab({
                   </span>
                 </div>
               </div>
+              {capLedger && (
+                <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle, rgba(255,255,255,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Allowable Recovery Cap (Backend Ledger):
+                  </span>
+                  <strong style={{ fontFamily: 'var(--font-serif)', fontSize: '1.1rem', color: 'var(--accent)' }}>
+                    {capLedger.approval_eligibility === 'PENDING_REVIEW'
+                      ? 'Pending review'
+                      : format(capLedger.remaining_cap ?? capLedger.remaining_cap_cents ?? 0)}
+                  </strong>
+                </div>
+              )}
             </div>
 
             {/* Insufficient Data notice */}
-            {calculation.engine_status === 'INSUFFICIENT_DATA' && (
-              <div style={{ 
-                background: 'var(--status-rust-bg)', 
-                border: '1px solid var(--status-rust-border)', 
-                borderRadius: 'var(--radius-md)', 
-                padding: '0.9rem 1.25rem', 
-                marginTop: '1.25rem',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.75rem'
-              }}>
-                <AlertCircle size={18} style={{ color: 'var(--status-rust)', flexShrink: 0 }} />
-                <div style={{ fontSize: '0.85rem', color: 'var(--ink)', lineHeight: 1.45 }}>
-                  <strong style={{ color: 'var(--status-rust)' }}>Metered pricing rule requires usage events:</strong> No usage telemetry has been uploaded for this dispute line yet. Upload the customer's usage logs via the "Upload Evidence" button above to recalculate the true billable amount.
+            {calculation.engine_status === 'INSUFFICIENT_DATA' && (() => {
+              const qEvents = calculation.quarantined_events || [];
+              const periodEvents = qEvents.filter(q => q.reason === 'Outside billing period');
+              const isPeriodQuarantine = periodEvents.length > 0;
+              return (
+                <div style={{ 
+                  background: 'var(--status-rust-bg)', 
+                  border: '1px solid var(--status-rust-border)', 
+                  borderRadius: 'var(--radius-md)', 
+                  padding: '0.9rem 1.25rem', 
+                  marginTop: '1.25rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.75rem'
+                }}>
+                  <AlertCircle size={18} style={{ color: 'var(--status-rust)', flexShrink: 0 }} />
+                  <div style={{ fontSize: '0.85rem', color: 'var(--ink)', lineHeight: 1.45 }}>
+                    {isPeriodQuarantine ? (
+                      <>
+                        <strong style={{ color: 'var(--status-rust)' }}>Events Quarantined Outside Billing Period: </strong>
+                        {periodEvents.length} telemetry event{periodEvents.length === 1 ? '' : 's'} were quarantined because event timestamps fall outside the billing period ({caseData?.period_start ? new Date(caseData.period_start).toLocaleDateString() : 'N/A'} – {caseData?.period_end ? new Date(caseData.period_end).toLocaleDateString() : 'N/A'}). No billable events remained inside the period.
+                      </>
+                    ) : (
+                      <>
+                        <strong style={{ color: 'var(--status-rust)' }}>Metered pricing rule requires usage events:</strong> No usage telemetry has been uploaded for this dispute line yet. Upload the customer's usage logs via the "Upload Evidence" button above to recalculate the true billable amount.
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Per-Line Recalculation Breakdown Table */}
             {calculation.line_results && calculation.line_results.length > 0 && (
@@ -191,7 +199,7 @@ export default function EngineTab({
                               </div>
                             </td>
                             <td className="table-money-cell" style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
-                              {formatCents(lr.original_amount_cents)}
+                              {format(lr.original_amount_cents)}
                             </td>
                             <td className="table-money-cell" style={{ whiteSpace: 'nowrap', textAlign: 'right', color: 'var(--ink)' }}>
                               {isInsufficient ? (
@@ -202,7 +210,7 @@ export default function EngineTab({
                                 <div>
                                   <span style={{ color: 'var(--status-amber)', fontWeight: 600 }}>
                                     {minInterp != null && maxInterp != null && minInterp !== maxInterp
-                                      ? `${formatCents(minInterp)} – ${formatCents(maxInterp)}`
+                                      ? `${format(minInterp)} – ${format(maxInterp)}`
                                       : 'Ambiguous'}
                                   </span>
                                   <div style={{ fontSize: '0.68rem', color: 'var(--status-amber)', fontWeight: 600, marginTop: '1px' }}>
@@ -210,7 +218,7 @@ export default function EngineTab({
                                   </div>
                                 </div>
                               ) : (
-                                formatCents(lr.recalculated_amount_cents)
+                                format(lr.recalculated_amount_cents)
                               )}
                             </td>
                             <td className="table-money-cell" style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
@@ -223,7 +231,7 @@ export default function EngineTab({
                                   {lr.undisputed_overcharge_cents > 0 ? (
                                     <>
                                       <span style={{ color: 'var(--status-amber)', fontWeight: 600, fontSize: '0.85rem' }}>
-                                        {formatDifference(-lr.undisputed_overcharge_cents)}
+                                        {formatDiff(-lr.undisputed_overcharge_cents)}
                                       </span>
                                       <div style={{ fontSize: '0.68rem', color: 'var(--status-amber)', fontWeight: 600, marginTop: '1px' }}>
                                         (Undisputed min overcharge)
@@ -242,7 +250,7 @@ export default function EngineTab({
                                 </div>
                               ) : (
                                 <span style={{ color: isOvercharge ? 'var(--status-rust)' : isUndercharge ? 'var(--status-amber)' : 'var(--status-green)', fontWeight: 600 }}>
-                                  {formatDifference(lr.difference_cents)}
+                                  {formatDiff(lr.difference_cents)}
                                 </span>
                               )}
                             </td>
@@ -274,10 +282,10 @@ export default function EngineTab({
                                       return (
                                         <div key={idx} style={{ fontSize: '0.72rem', color: 'var(--ink)' }}>
                                           <strong>{interp.interpretation_id || `Option ${idx+1}`}:</strong>{' '}
-                                          <span style={{ fontWeight: 600 }}>{formatCents(interp.recalculated_amount_cents)}</span>
+                                          <span style={{ fontWeight: 600 }}>{format(interp.recalculated_amount_cents)}</span>
                                           {diff != null && (
                                             <span style={{ marginLeft: '4px', color: diff < 0 ? 'var(--status-rust)' : 'var(--status-green)' }}>
-                                              ({formatDifference(diff)})
+                                              ({formatDiff(diff)})
                                             </span>
                                           )}
                                         </div>

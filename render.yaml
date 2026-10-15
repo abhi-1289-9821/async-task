@@ -25,6 +25,10 @@ services:
         value: google/gemini-2.5-flash
       - key: INVESTIGATION_RUN_TTL_SECONDS
         value: "180"
+      - key: ALLOW_MOCK_FALLBACK
+        value: "false"
+      - key: DEMO_MODE
+        value: "false"
       - key: DATABASE_URL
         sync: false
       - key: GEMINI_API_KEY

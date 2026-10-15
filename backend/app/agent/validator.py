@@ -13,6 +13,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.utils.money import format_money
+
 logger = logging.getLogger(__name__)
 
 VALID_FINDING_TYPES = {
@@ -42,10 +44,11 @@ class LLMFindingPayload(BaseModel):
 def validate_llm_payload(
     raw_dict: dict[str, Any],
     line_results: list[dict[str, Any]],
+    quarantined_events: Optional[list[dict[str, Any]]] = None,
 ) -> tuple[bool, dict[str, Any], list[str]]:
     """
     Validates LLM finding JSON against schema, verifies line_result_id against this run,
-    and validates that finding_type is recognized.
+    validates that finding_type is recognized, and validates evidence questions.
     """
     errors = []
     try:
@@ -66,6 +69,31 @@ def validate_llm_payload(
                 f"Bogus calculation_line_result_id '{sanitized['calculation_line_result_id']}'; not present in this run"
             )
             sanitized["calculation_line_result_id"] = None
+
+    # Quality Gate (Task 5a): Clean & deduplicate missing_evidence_questions and open_questions.
+    # Drop empty or duplicate questions. Drop all when finding is CONFIRMED_CALCULATION_DISCREPANCY and telemetry is complete.
+    seen_meq = set()
+    cleaned_meq = []
+    for q in sanitized.get("missing_evidence_questions") or []:
+        q_str = str(q).strip()
+        if q_str and q_str not in seen_meq:
+            seen_meq.add(q_str)
+            cleaned_meq.append(q_str)
+
+    telemetry_is_complete = not bool(quarantined_events)
+    if sanitized["finding_type"] == "CONFIRMED_CALCULATION_DISCREPANCY" and telemetry_is_complete:
+        cleaned_meq = []
+
+    sanitized["missing_evidence_questions"] = cleaned_meq
+
+    seen_oq = set()
+    cleaned_oq = []
+    for q in sanitized.get("open_questions") or []:
+        q_str = str(q).strip()
+        if q_str and q_str not in seen_oq:
+            seen_oq.add(q_str)
+            cleaned_oq.append(q_str)
+    sanitized["open_questions"] = cleaned_oq
 
     return (len(errors) == 0), sanitized, errors
 
@@ -129,8 +157,9 @@ def generate_engine_narrative(
     engine_finding_type: str,
     line_results: list[dict[str, Any]],
     calculation_status: str = "OK",
+    currency: str = "USD",
 ) -> str:
-    """Generates deterministic, mathematically consistent narrative when AI narrative contradicts engine."""
+    """Generates deterministic, mathematically consistent narrative formatted with the case currency."""
     if engine_finding_type == "INSUFFICIENT_EVIDENCE":
         return "Deterministic billing engine calculation indicates insufficient telemetry or contract data to recalculate line items. Additional evidence or rule definitions are required to complete investigation."
     elif engine_finding_type == "CONTRACT_AMBIGUITY":
@@ -140,8 +169,12 @@ def generate_engine_narrative(
     elif engine_finding_type == "CONFIRMED_CALCULATION_DISCREPANCY":
         overcharged = [lr for lr in line_results if lr.get("difference_cents") is not None and lr.get("difference_cents") < 0]
         total_overcharge = sum(abs(lr.get("difference_cents", 0)) for lr in overcharged)
-        lines_summary = ", ".join(f"{lr.get('line_id')} (billed {lr.get('original_amount_cents')}¢, recalculated {lr.get('recalculated_amount_cents')}¢)" for lr in overcharged)
-        return f"Deterministic billing engine confirmed an overcharge totaling {total_overcharge}¢ across line item(s): {lines_summary}. Discrepancy is eligible for credit approval."
+        formatted_total = format_money(total_overcharge, currency)
+        lines_summary = ", ".join(
+            f"{lr.get('line_id')} (billed {format_money(lr.get('original_amount_cents'), currency)}, recalculated {format_money(lr.get('recalculated_amount_cents'), currency)})"
+            for lr in overcharged
+        )
+        return f"Deterministic billing engine confirmed an overcharge totaling {formatted_total} across line item(s): {lines_summary}. Discrepancy is eligible for credit approval."
     else:
         return "Deterministic billing engine verified all line items against contractual pricing rules and telemetry events. All billed amounts match recalculated figures; no discrepancy found."
 
@@ -278,63 +311,195 @@ def sanitize_resolution_options(
     return sanitized
 
 
+MECHANISM_PATTERNS = {
+    "FLAT": [re.compile(r"\bflat[\s-]rate\b", re.I), re.compile(r"\bflat[\s-]fee\b", re.I), re.compile(r"\bflat[\s-]pricing\b", re.I)],
+    "PER_UNIT": [re.compile(r"\bper[\s-]unit\b", re.I), re.compile(r"\bunit[\s-]rate\b", re.I)],
+    "TIERED_GRADUATED": [re.compile(r"\bgraduated\b", re.I), re.compile(r"\btiered[\s-]graduated\b", re.I)],
+    "TIERED_VOLUME": [re.compile(r"\bvolume[\s-]tier\b", re.I), re.compile(r"\btiered[\s-]volume\b", re.I)],
+    "INCLUDED_UNITS": [re.compile(r"\bincluded[\s-]units\b", re.I), re.compile(r"\boverage\b", re.I)],
+    "DISCOUNT_PCT": [re.compile(r"\bdiscount\b", re.I), re.compile(r"\bpercentage[\s-]discount\b", re.I)],
+    "MINIMUM_COMMIT": [re.compile(r"\bminimum[\s-]commit\b", re.I), re.compile(r"\bfloor\b", re.I)],
+}
+
+
+def validate_hypotheses_grounding(
+    possible_explanations: list[str],
+    contract_rules: list[dict[str, Any]] | None = None,
+    line_results: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """
+    Quality Gate (Task 5b): Validates that root-cause hypotheses are grounded in evidence.
+    A hypothesis may only state a cause that is derivable from provided evidence;
+    otherwise it must be 'Cause cannot be determined from the provided evidence'.
+    Rejects hypotheses that assert specific rates/mechanisms not present in the contract rules or events.
+    """
+    present_rule_types = {r.get("rule_type") for r in (contract_rules or []) if r.get("rule_type")}
+    FALLBACK_CAUSE = "Cause cannot be determined from the provided evidence"
+    grounded = []
+
+    for hyp in possible_explanations or []:
+        hyp_str = str(hyp).strip()
+        if not hyp_str:
+            continue
+        if hyp_str == FALLBACK_CAUSE:
+            if FALLBACK_CAUSE not in grounded:
+                grounded.append(FALLBACK_CAUSE)
+            continue
+
+        is_ungrounded = False
+        for rule_type, patterns in MECHANISM_PATTERNS.items():
+            if rule_type not in present_rule_types:
+                for pat in patterns:
+                    if pat.search(hyp_str):
+                        logger.warning(
+                            "Rejected ungrounded hypothesis asserting '%s' mechanism not in contract rules: %s",
+                            rule_type,
+                            hyp_str,
+                        )
+                        is_ungrounded = True
+                        break
+            if is_ungrounded:
+                break
+
+        if is_ungrounded:
+            if FALLBACK_CAUSE not in grounded:
+                grounded.append(FALLBACK_CAUSE)
+        else:
+            grounded.append(hyp_str)
+
+    if not grounded:
+        grounded.append(FALLBACK_CAUSE)
+
+    return grounded
+
+
+WORD_NUMS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+    "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+MULTIPLIERS = {
+    "hundred": 100,
+    "thousand": 1000,
+    "million": 1000000,
+}
+
+
+def parse_words_to_number(words_str: str) -> Optional[int]:
+    """Parses written-out words into a single integer (e.g. 'five thousand' -> 5000)."""
+    tokens = re.findall(r"[a-zA-Z]+|[0-9]+", words_str.lower())
+    if not tokens:
+        return None
+    total = 0
+    current = 0
+    for w in tokens:
+        if w in WORD_NUMS:
+            current += WORD_NUMS[w]
+        elif w.isdigit():
+            current += int(w)
+        elif w in MULTIPLIERS:
+            mult = MULTIPLIERS[w]
+            if current == 0:
+                current = 1
+            if mult >= 1000:
+                total += current * mult
+                current = 0
+            else:
+                current *= mult
+        elif w == "and":
+            continue
+        else:
+            return None
+    return total + current
+
+
 def extract_monetary_amounts_cents(text: str) -> list[tuple[str, int, bool]]:
     """
-    Extracts explicit dollar ($X or $X.YY) and cent (X¢, X cents) amounts from narrative text.
+    Quality Gate (Task 5c): Extracts explicit monetary amounts from narrative text:
+      - Dollar, Euro, Pound symbols ($X, €X, £X)
+      - Currency code prefixes (EUR 5000, USD 5000, GBP 5000)
+      - Currency suffixes (5,000 USD, 5000 EUR, 5000 GBP, 5000 dollars, 5000 euros, 5000 pounds)
+      - Cents (5000¢, 5000 cents, 5000c)
+      - Written-out numbers ("five thousand dollars", "fifty dollars", "one hundred euros")
     Returns list of (raw_token, amount_cents, is_rate).
-    is_rate is True if the amount is explicitly followed by a unit rate specifier (e.g. /unit, per call).
     """
     if not text:
         return []
     results = []
+    seen_tokens = set()
 
-    # Match $50, $50.00, $0.50, $1,000.00, $9,999.99 (with optional rate suffix)
-    dollar_matches = re.finditer(
-        r"\$([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)(\s*(?:/|per\s+)[a-zA-Z]+)?",
+    def add_result(raw_str: str, cents: int, is_rate: bool):
+        key = (raw_str, cents, is_rate)
+        if key not in seen_tokens:
+            seen_tokens.add(key)
+            results.append((raw_str, cents, is_rate))
+
+    # 1. Prefix: $, €, £, or EUR/USD/GBP followed by number
+    prefix_matches = re.finditer(
+        r"(?:\$|€|£|\b(?:EUR|USD|GBP)\s*)([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)(\s*(?:/|per\s+)[a-zA-Z]+)?",
         text,
         re.IGNORECASE,
     )
-    for m in dollar_matches:
-        raw_str = m.group(0)
-        num_str = m.group(1).replace(",", "")
-        is_rate = bool(m.group(2))
-        try:
-            val_cents = int((Decimal(num_str) * 100).to_integral_value())
-            results.append((raw_str, val_cents, is_rate))
-        except (InvalidOperation, TypeError, ValueError) as exc:
-            logger.debug("Dollar parse skipped for %r: %s", raw_str, exc)
-
-    # Match 5,000 USD, 5000 USD, 50.00 USD, 5,000 dollars, 50 dollars (trailing USD/dollars)
-    usd_matches = re.finditer(
-        r"(?<![0-9\$])([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*(?:USD|dollars?)(\s*(?:/|per\s+)[a-zA-Z]+)?\b",
-        text,
-        re.IGNORECASE,
-    )
-    for m in usd_matches:
+    for m in prefix_matches:
         raw_str = m.group(0).strip()
         num_str = m.group(1).replace(",", "")
         is_rate = bool(m.group(2))
         try:
             val_cents = int((Decimal(num_str) * 100).to_integral_value())
-            results.append((raw_str, val_cents, is_rate))
+            add_result(raw_str, val_cents, is_rate)
         except (InvalidOperation, TypeError, ValueError) as exc:
-            logger.debug("USD parse skipped for %r: %s", raw_str, exc)
+            logger.debug("Currency prefix parse skipped for %r: %s", raw_str, exc)
 
-    # Match 5000¢, 5000 cents, 5000 cent
+    # 2. Suffix: 5,000 USD, 5000 USD, 5000 EUR, 5000 GBP, 5000 dollars, 5000 euros, 5000 pounds
+    suffix_matches = re.finditer(
+        r"(?<![0-9\$€£])([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)\s*(?:USD|EUR|GBP|dollars?|euros?|pounds?)(\s*(?:/|per\s+)[a-zA-Z]+)?\b",
+        text,
+        re.IGNORECASE,
+    )
+    for m in suffix_matches:
+        raw_str = m.group(0).strip()
+        num_str = m.group(1).replace(",", "")
+        is_rate = bool(m.group(2))
+        try:
+            val_cents = int((Decimal(num_str) * 100).to_integral_value())
+            add_result(raw_str, val_cents, is_rate)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            logger.debug("Currency suffix parse skipped for %r: %s", raw_str, exc)
+
+    # 3. Cents / pence: 5000¢, 5000 cents, 5000c
     cent_matches = re.finditer(
-        r"(?<![0-9])([0-9]+)\s*(?:¢|cents?)(\s*(?:/|per\s+)[a-zA-Z]+)?(?![a-zA-Z0-9])",
+        r"(?<![0-9])([0-9]+)\s*(?:¢|cents?|pence|c)(?!\w)",
         text,
         re.IGNORECASE,
     )
     for m in cent_matches:
         raw_str = m.group(0).strip()
         num_str = m.group(1)
-        is_rate = bool(m.group(2))
+        is_rate = False
         try:
             val_cents = int(num_str)
-            results.append((raw_str, val_cents, is_rate))
+            add_result(raw_str, val_cents, is_rate)
         except (InvalidOperation, TypeError, ValueError) as exc:
             logger.debug("Cent parse skipped for %r: %s", raw_str, exc)
+
+    # 4. Written-out numbers: "five thousand dollars", "fifty dollars", "one hundred euros", "5 thousand USD"
+    written_matches = re.finditer(
+        r"\b((?:(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million|and|[0-9]+)[\s-]+)+)\s*(dollars?|usd|euros?|eur|pounds?|gbp|cents?|pence)\b",
+        text,
+        re.IGNORECASE,
+    )
+    for m in written_matches:
+        raw_str = m.group(0).strip()
+        words = m.group(1).strip()
+        unit = m.group(2).lower()
+        val = parse_words_to_number(words)
+        if val is not None:
+            if unit in ("cents", "cent", "pence"):
+                val_cents = val
+            else:
+                val_cents = val * 100
+            add_result(raw_str, val_cents, False)
 
     return results
 

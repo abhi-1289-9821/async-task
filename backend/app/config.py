@@ -6,6 +6,7 @@ All sensitive values come from environment; .env file used for local dev.
 Never commit .env. Use .env.example as the template.
 """
 
+from typing import Any
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -39,7 +40,7 @@ class Settings(BaseSettings):
 
     # Two tokens map to REVIEWER and VIEWER roles.
     # In strict production (demo_mode=false), default demo tokens are refused.
-    demo_mode: bool = True
+    demo_mode: bool = False
     demo_reviewer_token: str = "demo-reviewer-token-2026"
     demo_viewer_token: str = "demo-viewer-token-2026"
     # Optional multi-user tokens: "token_alice:alice@fairbill.io,token_bob:bob@fairbill.io"
@@ -50,6 +51,16 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     cors_origins: str = "http://localhost:5173"  # comma-separated for prod
     investigation_run_ttl_seconds: int = 180
+
+    @model_validator(mode="before")
+    @classmethod
+    def apply_env_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            env = str(data.get("environment", "development")).lower()
+            if "demo_mode" not in data or data.get("demo_mode") is None:
+                # Default off in production, default on in dev/test
+                data["demo_mode"] = False if env == "production" else True
+        return data
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":

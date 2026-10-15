@@ -72,9 +72,11 @@ def approve_case_credit(
 
 
 @router.get("/case/{case_id}/cap", response_model=CreditCapResponse)
+@router.get("/cap/{case_id}", response_model=CreditCapResponse)
 def get_credit_cap(
     case_id: str,
-    invoice_line_id: str = Query(..., description="Invoice line to compute cap for"),
+    invoice_line_id: Optional[str] = Query(None, description="Invoice line to compute cap for"),
+    line_id: Optional[str] = Query(None, description="Alias for invoice_line_id"),
     calculation_line_result_id: Optional[int] = Query(None, description="Specific line result (uses latest if omitted)"),
     user: Annotated[AuthUser, Depends(get_current_user)] = None,
     db: Session = Depends(get_db),
@@ -84,26 +86,13 @@ def get_credit_cap(
     The frontend calls this endpoint instead of recomputing money in JavaScript.
     Uses the SAME logic as the approve_credit path.
     """
+    target_line = invoice_line_id or line_id
+    if not target_line:
+        first_line = db.query(InvoiceLine).filter(InvoiceLine.case_id == case_id).first()
+        target_line = first_line.id if first_line else ""
     case = db.query(Case).filter(Case.id == case_id).one_or_none()
     if not case:
         raise HTTPException(status_code=404, detail=f"Case '{case_id}' not found")
-
-    inv_line = db.query(InvoiceLine).filter(InvoiceLine.case_id == case_id, InvoiceLine.id == invoice_line_id).first()
-    empty = CreditCapResponse(
-        original_billed_cents=inv_line.original_amount_cents if inv_line else None,
-        recalculated_cents=None,
-        gross_discrepancy_cents=None,
-        eligible_cents=0,
-        prior_credits_cents=0,
-        line_adjustments_cents=0,
-        case_wide_adjustments_cents=0,
-        unverified_adjustments_cents=0,
-        remaining_cap_cents=0,
-        issued_credit_cents=0,
-        is_eligible=False,
-        blocked_reason="No deterministic calculation run found for invoice line",
-        currency=case.currency if case and case.currency else "USD",
-    )
 
     if calculation_line_result_id:
         lr = db.query(CalculationLineResult).filter(CalculationLineResult.id == calculation_line_result_id).one_or_none()
@@ -114,21 +103,18 @@ def get_credit_cap(
             .order_by(desc(Calculation.created_at), desc(Calculation.id))
             .first()
         )
-        if not latest_calc:
-            return empty
-        lr = (
-            db.query(CalculationLineResult)
-            .filter(
-                CalculationLineResult.calculation_id == latest_calc.id,
-                CalculationLineResult.line_id == invoice_line_id,
+        lr = None
+        if latest_calc:
+            lr = (
+                db.query(CalculationLineResult)
+                .filter(
+                    CalculationLineResult.calculation_id == latest_calc.id,
+                    CalculationLineResult.line_id == target_line,
+                )
+                .first()
             )
-            .first()
-        )
 
-    if not lr:
-        return empty
-
-    cap_info = compute_remaining_cap(db, case_id, invoice_line_id, lr)
+    cap_info = compute_remaining_cap(db, case_id, target_line, lr)
     return CreditCapResponse(**cap_info)
 
 

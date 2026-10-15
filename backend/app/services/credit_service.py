@@ -53,18 +53,76 @@ def generate_idempotency_key(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def compute_remaining_cap_from_values(
+    eligible_overcharge: int,
+    prior_credits: int,
+    verified_adjustments: int,
+    unverified_adjustments: int = 0,
+) -> dict:
+    """
+    Pure mathematical remaining cap calculation adhering to Invariant 1:
+    remaining_cap = max(0, eligible_overcharge - prior_credits - verified_adjustments).
+    Unverified adjustments never deduct from the allowable recovery cap.
+    """
+    remaining_cap = max(0, eligible_overcharge - prior_credits - verified_adjustments)
+    return {
+        "eligible_overcharge": eligible_overcharge,
+        "prior_credits": prior_credits,
+        "verified_adjustments": verified_adjustments,
+        "unverified_adjustments": unverified_adjustments,
+        "remaining_cap": remaining_cap,
+    }
+
+
 def compute_remaining_cap(
     db: Session,
     case_id: str,
     invoice_line_id: str,
-    line_result,
+    line_result=None,
 ) -> dict:
     """
-    Computes the remaining credit cap for an invoice line.
-    Returns a dict with all 8 authoritative credit governance metrics.
-    Used by both approve_credit and GET /cap endpoint.
+    Computes the authoritative credit ledger and remaining credit cap for an invoice line.
+    Returns a dict with all authoritative credit governance metrics.
+    Used by both approve_credit and GET /api/credits/case/{case_id}/cap endpoint.
     """
-    if getattr(line_result, "finding_type", None) in ("AMBIGUOUS", FindingTypeDB.AMBIGUOUS) or (getattr(line_result, "undisputed_overcharge_cents", None) and getattr(line_result, "undisputed_overcharge_cents") > 0):
+    case = db.query(Case).filter(Case.id == case_id).first()
+    currency = case.currency if case and case.currency else "USD"
+
+    # If line_result is not passed, resolve from latest calculation
+    if line_result is None:
+        latest_calc = (
+            db.query(Calculation)
+            .filter(Calculation.case_id == case_id)
+            .order_by(Calculation.created_at.desc(), Calculation.id.desc())
+            .first()
+        )
+        if latest_calc:
+            line_result = (
+                db.query(CalculationLineResult)
+                .filter(
+                    CalculationLineResult.calculation_id == latest_calc.id,
+                    CalculationLineResult.line_id == invoice_line_id,
+                )
+                .first()
+            )
+
+    inv_line = db.query(InvoiceLine).filter(
+        InvoiceLine.case_id == case_id,
+        InvoiceLine.id == invoice_line_id,
+    ).first()
+
+    orig_billed = getattr(line_result, "original_amount_cents", None)
+    if orig_billed is None and inv_line:
+        orig_billed = inv_line.original_amount_cents
+
+    recalc_cents = getattr(line_result, "recalculated_amount_cents", None)
+    gross_diff = getattr(line_result, "difference_cents", None)
+
+    if line_result is None:
+        eligible_overcharge = 0
+    elif getattr(line_result, "finding_type", None) in ("AMBIGUOUS", FindingTypeDB.AMBIGUOUS) or (
+        getattr(line_result, "undisputed_overcharge_cents", None) and getattr(line_result, "undisputed_overcharge_cents") > 0
+    ):
         eligible_overcharge = getattr(line_result, "undisputed_overcharge_cents", 0) or 0
     elif line_result.difference_cents is None:
         eligible_overcharge = 0
@@ -80,7 +138,7 @@ def compute_remaining_cap(
         .scalar()
     )
 
-    # Only verified adjustments count against the confirmed credit cap
+    # Line-specific verified adjustments
     line_adjustments = int(
         db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
         .filter(
@@ -92,20 +150,27 @@ def compute_remaining_cap(
     )
     line_cap = max(0, eligible_overcharge - prior_credits - line_adjustments)
 
+    # Case-wide verified adjustments (invoice_line_id is null or empty)
     case_wide_adjustments = int(
         db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
         .filter(
             Adjustment.case_id == case_id,
-            Adjustment.invoice_line_id.is_(None),
+            (Adjustment.invoice_line_id.is_(None) | (Adjustment.invoice_line_id == "")),
             Adjustment.is_verified == True,  # noqa: E712
         )
         .scalar()
     )
 
+    # Unverified adjustments (on this line or case-wide)
     unverified_adjustments = int(
         db.query(func.coalesce(func.sum(Adjustment.amount_cents), 0))
         .filter(
             Adjustment.case_id == case_id,
+            (
+                (Adjustment.invoice_line_id == invoice_line_id)
+                | Adjustment.invoice_line_id.is_(None)
+                | (Adjustment.invoice_line_id == "")
+            ),
             Adjustment.is_verified == False,  # noqa: E712
         )
         .scalar()
@@ -123,16 +188,18 @@ def compute_remaining_cap(
             .order_by(Calculation.created_at.desc(), Calculation.id.desc())
             .first()
         )
-        calc_id = latest_calc.id if latest_calc else line_result.calculation_id
-        all_lrs = (
-            db.query(CalculationLineResult)
-            .join(Calculation, Calculation.id == CalculationLineResult.calculation_id)
-            .filter(
-                Calculation.id == calc_id,
-                Calculation.case_id == case_id,
+        calc_id = latest_calc.id if latest_calc else (line_result.calculation_id if line_result else None)
+        all_lrs = []
+        if calc_id:
+            all_lrs = (
+                db.query(CalculationLineResult)
+                .join(Calculation, Calculation.id == CalculationLineResult.calculation_id)
+                .filter(
+                    Calculation.id == calc_id,
+                    Calculation.case_id == case_id,
+                )
+                .all()
             )
-            .all()
-        )
         total_case_overcharge = 0
         for lr_item in all_lrs:
             if lr_item.difference_cents is not None and lr_item.difference_cents < 0:
@@ -145,60 +212,86 @@ def compute_remaining_cap(
     else:
         remaining_cap = line_cap
 
-    case = db.query(Case).filter(Case.id == case_id).first()
-    currency = case.currency if case and case.currency else "USD"
-
     # Evaluate approval eligibility and blocked reason
     is_eligible = True
-    blocked_reason = None
-    lr_ft = getattr(line_result, "finding_type", None)
-    lr_ft_str = lr_ft.value if hasattr(lr_ft, "value") else str(lr_ft)
-    if lr_ft_str == "INSUFFICIENT_DATA" or (line_result.difference_cents is None and lr_ft_str != "AMBIGUOUS"):
+    approval_eligibility = "ELIGIBLE"
+    reason = "Eligible for credit approval"
+
+    if line_result is None:
         is_eligible = False
-        blocked_reason = "Evidence is insufficient for deterministic calculation"
+        approval_eligibility = "PENDING_REVIEW"
+        reason = "Pending review"
     else:
-        finding = (
-            db.query(Finding)
-            .filter(
-                Finding.case_id == case_id,
-                (Finding.invoice_line_id == invoice_line_id) | (Finding.calculation_line_result_id == line_result.id)
-            )
-            .order_by(Finding.created_at.desc(), Finding.id.desc())
-            .first()
-        )
-        if not finding:
+        lr_ft = getattr(line_result, "finding_type", None)
+        lr_ft_str = lr_ft.value if hasattr(lr_ft, "value") else str(lr_ft)
+        if lr_ft_str == "INSUFFICIENT_DATA" or (line_result.difference_cents is None and lr_ft_str != "AMBIGUOUS"):
             is_eligible = False
-            blocked_reason = f"No finding available for line {invoice_line_id}"
-        elif finding.is_stale:
-            is_eligible = False
-            blocked_reason = "Finding is stale due to updated evidence"
+            approval_eligibility = "BLOCKED"
+            reason = "Evidence is insufficient for deterministic calculation"
         else:
-            latest_review = (
-                db.query(FindingReview)
-                .filter(FindingReview.finding_id == finding.id)
-                .order_by(FindingReview.created_at.desc(), FindingReview.id.desc())
+            finding = (
+                db.query(Finding)
+                .filter(
+                    Finding.case_id == case_id,
+                    (Finding.invoice_line_id == invoice_line_id) | (Finding.calculation_line_result_id == line_result.id)
+                )
+                .order_by(Finding.created_at.desc(), Finding.id.desc())
                 .first()
             )
-            if not latest_review or latest_review.action != "ACCEPT":
+            if not finding:
                 is_eligible = False
-                blocked_reason = f"Latest review must be ACCEPT (currently {latest_review.action if latest_review else 'unreviewed'})"
-            elif remaining_cap <= 0:
+                approval_eligibility = "PENDING_REVIEW"
+                reason = "Pending review"
+            elif finding.is_stale:
                 is_eligible = False
-                blocked_reason = "Remaining allowable credit cap is $0.00"
+                approval_eligibility = "BLOCKED"
+                reason = "Finding is stale due to updated evidence"
+            else:
+                latest_review = (
+                    db.query(FindingReview)
+                    .filter(FindingReview.finding_id == finding.id)
+                    .order_by(FindingReview.created_at.desc(), FindingReview.id.desc())
+                    .first()
+                )
+                if not latest_review:
+                    is_eligible = False
+                    approval_eligibility = "PENDING_REVIEW"
+                    reason = "Pending review"
+                elif latest_review.action != "ACCEPT":
+                    is_eligible = False
+                    approval_eligibility = "BLOCKED"
+                    reason = f"Latest review must be ACCEPT (currently {latest_review.action})"
+                elif remaining_cap <= 0:
+                    is_eligible = False
+                    approval_eligibility = "BLOCKED"
+                    sym = "€" if currency == "EUR" else ("£" if currency == "GBP" else "$")
+                    reason = f"Remaining allowable credit cap is {sym}0.00"
+
+    verified_adjustments_total = line_adjustments + case_wide_adjustments
 
     return {
-        "original_billed_cents": getattr(line_result, "original_amount_cents", None),
-        "recalculated_cents": getattr(line_result, "recalculated_amount_cents", None),
-        "gross_discrepancy_cents": getattr(line_result, "difference_cents", None),
-        "prior_credits_cents": prior_credits,
+        "original": orig_billed,
+        "original_billed_cents": orig_billed,
+        "recalculated": recalc_cents,
+        "recalculated_cents": recalc_cents,
+        "gross_discrepancy": gross_diff,
+        "gross_discrepancy_cents": gross_diff,
+        "verified_adjustments": verified_adjustments_total,
         "line_adjustments_cents": line_adjustments,
         "case_wide_adjustments_cents": case_wide_adjustments,
+        "unverified_adjustments": unverified_adjustments,
         "unverified_adjustments_cents": unverified_adjustments,
+        "prior_credits": prior_credits,
+        "prior_credits_cents": prior_credits,
+        "eligible_overcharge": eligible_overcharge,
         "eligible_cents": eligible_overcharge,
+        "remaining_cap": remaining_cap,
         "remaining_cap_cents": remaining_cap,
         "issued_credit_cents": prior_credits,
+        "approval_eligibility": approval_eligibility,
         "is_eligible": is_eligible,
-        "blocked_reason": blocked_reason,
+        "reason": reason,
+        "blocked_reason": reason,
         "currency": currency,
     }
 

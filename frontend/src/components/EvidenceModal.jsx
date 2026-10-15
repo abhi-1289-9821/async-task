@@ -2,16 +2,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Upload, Sparkles, AlertCircle, FileText, Activity, Plus, Trash2 } from 'lucide-react';
 import { uploadEvidence, uploadRulesEvidence } from '../api/client';
+import { getCurrencySymbol } from '../utils/money';
 
 export default function EvidenceModal({
   isOpen,
   onClose,
   caseId,
   lineId,
+  currency = 'USD',
   contractRules = [],
   invoiceLines = [],
   onEvidenceUploaded,
 }) {
+  const currencySymbol = getCurrencySymbol(currency);
   const [activeTab, setActiveTab] = useState('telemetry'); // 'telemetry' | 'contract'
 
   // Telemetry Tab state
@@ -588,7 +591,7 @@ export default function EvidenceModal({
 
                 {ruleType === 'MINIMUM_COMMIT' && (
                   <div className="form-group" style={{ marginBottom: '1rem' }}>
-                    <label className="form-label">Minimum Floor Commitment ($ USD)</label>
+                    <label className="form-label">Minimum Floor Commitment ({currencySymbol})</label>
                     <input
                       type="number"
                       step="0.01"
@@ -718,7 +721,7 @@ export default function EvidenceModal({
                     </select>
                   </div>
                   <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label className="form-label">Adjustment Amount ($ USD)</label>
+                    <label className="form-label">Adjustment Amount ({currencySymbol})</label>
                     <input
                       type="number"
                       step="0.01"

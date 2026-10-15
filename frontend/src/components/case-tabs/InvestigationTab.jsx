@@ -1,11 +1,15 @@
 import React from 'react';
 import { Bot, AlertTriangle, Edit3, Hash, CheckCircle2, Database, ShieldAlert } from 'lucide-react';
+import { formatMoney, centsToDollarString } from '../../utils/money';
 
 export default function InvestigationTab({
   investigation,
   findings,
   calculation,
   caseData,
+  currency: propCurrency,
+  capInfo,
+  capLedger: propCapLedger,
   actionLoading,
   handleTriggerInvestigation,
   setSelectedFinding,
@@ -17,6 +21,8 @@ export default function InvestigationTab({
   setActiveTab,
   onRequestInfo,
 }) {
+  const capLedger = propCapLedger || capInfo;
+  const currency = propCurrency || caseData?.currency || capLedger?.currency || 'USD';
   const renderFindingCard = (f, isActive = true) => {
     const matchingLr = calculation?.line_results?.find((lr) => (f.invoice_line_id && lr.line_id === f.invoice_line_id) || (f.calculation_line_result_id && lr.id === f.calculation_line_result_id));
     const hasReviews = f.reviews && f.reviews.length > 0;
@@ -121,9 +127,9 @@ export default function InvestigationTab({
                 Deterministic Engine Result:
               </span>
               <span className="font-mono" style={{ fontSize: '0.75rem', color: 'var(--ink-secondary)' }}>
-                Billed: ${(matchingLr.original_amount_cents / 100).toFixed(2)} → Recalculated:{' '}
+                Billed: {formatMoney(matchingLr.original_amount_cents, currency)} → Recalculated:{' '}
                 {matchingLr.recalculated_amount_cents != null
-                  ? `$${(matchingLr.recalculated_amount_cents / 100).toFixed(2)}`
+                  ? formatMoney(matchingLr.recalculated_amount_cents, currency)
                   : 'Unavailable (Insufficient Data)'}
               </span>
             </div>
@@ -136,7 +142,7 @@ export default function InvestigationTab({
                   color: matchingLr.difference_cents < 0 ? 'var(--status-rust)' : 'var(--status-green)',
                 }}
               >
-                Discrepancy: ${(Math.abs(matchingLr.difference_cents) / 100).toFixed(2)}{' '}
+                Discrepancy: {formatMoney(Math.abs(matchingLr.difference_cents), currency)}{' '}
                 {matchingLr.difference_cents < 0 ? '(Overcharge)' : ''}
               </span>
             )}
@@ -268,9 +274,9 @@ export default function InvestigationTab({
               Audited Human Review History ({f.reviews.length})
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-              {f.reviews.map((rev) => (
+              {f.reviews.map((rev, i) => (
                 <div
-                  key={rev.id}
+                  key={rev.id || i}
                   style={{
                     background: 'var(--surface-subtle)',
                     padding: '0.75rem 1rem',
@@ -372,7 +378,9 @@ export default function InvestigationTab({
                 Tokens: {investigation.token_usage.total_tokens || 0}
               </span>
             )}
-            {investigation.token_usage?.provider === 'fallback_mock' && (
+            {(investigation.token_usage?.provider === 'fallback_mock' ||
+              investigation.status_reason?.includes('deterministic fallback') ||
+              investigation.status_reason?.includes('fallback_mock')) && (
               <div
                 style={{
                   width: '100%',
@@ -390,7 +398,7 @@ export default function InvestigationTab({
               >
                 <span style={{ fontSize: '1.1rem' }}>⚠️</span>
                 <span>
-                  <strong>Deterministic Reference Template (Not Live AI)</strong>: External LLM providers were unavailable or unconfigured. This run was synthesized using FairBill&apos;s deterministic rule engine reference template to guarantee 100% financial calculation accuracy.
+                  <strong>Template analysis, not AI</strong>: External LLM providers were unavailable or unconfigured. This run was synthesized using FairBill&apos;s deterministic rule engine reference template to guarantee 100% financial calculation accuracy.
                 </span>
               </div>
             )}
@@ -421,8 +429,6 @@ export default function InvestigationTab({
                   totalUndisputed += lr.undisputed_overcharge_cents;
                 }
               });
-
-              const effectiveCap = totalOvercharge > 0 ? totalOvercharge : totalUndisputed;
 
               const allQuestions = [];
               activeFindingsList.forEach((f) => {
@@ -475,17 +481,23 @@ export default function InvestigationTab({
                     <div style={{ background: 'var(--surface)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)' }}>
                       <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase' }}>Original Billed</div>
                       <div className="font-mono" style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--ink)' }}>
-                        ${(totalBilled / 100).toFixed(2)}
+                        {formatMoney(totalBilled, currency)}
                       </div>
                     </div>
                     <div style={{ background: 'var(--surface)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)' }}>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase' }}>Allowable Recovery Cap</div>
-                      <div className="font-mono" style={{ fontSize: '1.15rem', fontWeight: 700, color: effectiveCap > 0 ? 'var(--status-rust)' : 'var(--ink)' }}>
-                        ${(effectiveCap / 100).toFixed(2)}
+                      <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase' }}>Gross Discrepancy</div>
+                      <div className="font-mono" style={{ fontSize: '1.15rem', fontWeight: 700, color: (totalOvercharge > 0 || totalUndisputed > 0) ? 'var(--status-rust)' : 'var(--ink)' }}>
+                        {formatMoney(totalOvercharge > 0 ? totalOvercharge : totalUndisputed, currency)}
                       </div>
                       {totalUndisputed > 0 && totalOvercharge === 0 && (
                         <div style={{ fontSize: '0.68rem', color: 'var(--ink-muted)', marginTop: '2px' }}>Undisputed portion of ambiguous lines</div>
                       )}
+                    </div>
+                    <div style={{ background: 'var(--surface)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)' }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase' }}>Remaining Allowable Cap</div>
+                      <div className="font-mono" style={{ fontSize: '1.15rem', fontWeight: 700, color: (capLedger?.remaining_cap > 0 && capLedger?.approval_eligibility === 'ELIGIBLE') ? 'var(--status-green)' : 'var(--status-rust)' }}>
+                        {capLedger?.approval_eligibility === 'PENDING_REVIEW' ? 'Pending review' : formatMoney(capLedger?.remaining_cap ?? capLedger?.remaining_cap_cents ?? 0, currency)}
+                      </div>
                     </div>
                     <div style={{ background: 'var(--surface)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)' }}>
                       <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase' }}>Active Findings</div>
@@ -495,8 +507,8 @@ export default function InvestigationTab({
                     </div>
                     <div style={{ background: 'var(--surface)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--line)' }}>
                       <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase' }}>Evidence Status</div>
-                      <div style={{ fontSize: '0.92rem', fontWeight: 600, color: allQuestions.length > 0 ? 'var(--status-amber)' : 'var(--status-green)', marginTop: '3px' }}>
-                        {allQuestions.length > 0 ? `${allQuestions.length} Missing Items` : '✓ Complete'}
+                      <div style={{ fontSize: '0.82rem', fontWeight: 600, color: allQuestions.length > 0 ? 'var(--status-amber)' : 'var(--status-green)', marginTop: '3px' }}>
+                        {allQuestions.length > 0 ? allQuestions.join('; ') : '✓ Complete'}
                       </div>
                     </div>
                   </div>
@@ -520,20 +532,27 @@ export default function InvestigationTab({
 
                   {/* Missing Evidence Questions Action Banner */}
                   {allQuestions.length > 0 && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--status-rust-bg)', border: '1px solid var(--status-rust-border)', borderRadius: 'var(--radius-sm)', padding: '0.75rem 1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-                      <div style={{ fontSize: '0.82rem', color: 'var(--status-rust)', fontWeight: 600 }}>
-                        Missing telemetry or evidence items flagged by AI investigation ({allQuestions.length} questions).
+                    <div style={{ background: 'var(--status-rust-bg)', border: '1px solid var(--status-rust-border)', borderRadius: 'var(--radius-sm)', padding: '0.75rem 1rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <div style={{ fontSize: '0.82rem', color: 'var(--status-rust)', fontWeight: 600 }}>
+                          Missing telemetry or evidence items flagged by AI investigation:
+                        </div>
+                        {onRequestInfo && (
+                          <button
+                            type="button"
+                            className="btn btn-amber btn-sm"
+                            onClick={onRequestInfo}
+                            data-testid="request-missing-evidence-btn"
+                          >
+                            Request Missing Evidence from Customer
+                          </button>
+                        )}
                       </div>
-                      {onRequestInfo && (
-                        <button
-                          type="button"
-                          className="btn btn-amber btn-sm"
-                          onClick={onRequestInfo}
-                          data-testid="request-missing-evidence-btn"
-                        >
-                          Request Missing Evidence from Customer
-                        </button>
-                      )}
+                      <ul style={{ margin: 0, paddingLeft: '1.25rem', fontSize: '0.8rem', color: 'var(--ink)' }}>
+                        {allQuestions.map((q, qIdx) => (
+                          <li key={qIdx}>{q}</li>
+                        ))}
+                      </ul>
                     </div>
                   )}
                 </div>
@@ -643,10 +662,10 @@ export default function InvestigationTab({
                               const targetLr = calculation.line_results.find((lr) => lr.id === opt.calculation_line_result_id);
                               if (targetLr) {
                                 setSelectedLineId(targetLr.line_id);
-                                if (opt.option_type === 'CREDIT_UNDISPUTED_PORTION' && targetLr.undisputed_overcharge_cents > 0) {
-                                  setCreditAmountDollars((targetLr.undisputed_overcharge_cents / 100).toFixed(2));
-                                } else if (targetLr.difference_cents < 0) {
-                                  setCreditAmountDollars((Math.abs(targetLr.difference_cents) / 100).toFixed(2));
+                                if (capLedger?.approval_eligibility === 'ELIGIBLE' && (capLedger.remaining_cap > 0 || capLedger.remaining_cap_cents > 0)) {
+                                  setCreditAmountDollars(centsToDollarString(capLedger.remaining_cap ?? capLedger.remaining_cap_cents));
+                                } else {
+                                  setCreditAmountDollars('');
                                 }
                               }
                             }

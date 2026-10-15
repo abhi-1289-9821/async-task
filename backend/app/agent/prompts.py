@@ -47,6 +47,11 @@ CRITICAL SECURITY AND ACCURACY RULES:
    - NO_DISCREPANCY: Deterministic recalculation perfectly matches what was billed.
    - UNRESOLVED: Contradictory evidence exists that requires human adjudication.
 
+6. GROUNDED ROOT-CAUSE HYPOTHESES:
+   - A root-cause hypothesis in `possible_explanations` may ONLY state a cause that is directly derivable from provided evidence.
+   - If the cause cannot be determined from provided evidence, you MUST state: "Cause cannot be determined from the provided evidence".
+   - You MUST NOT assert specific pricing rates, formulas, or mechanisms (e.g. "flat rate", "volume tiering") that are not explicitly present in the contract rules or events.
+
 Your response must be valid JSON matching the requested schema.
 """
 

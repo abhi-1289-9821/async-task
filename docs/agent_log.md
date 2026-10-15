@@ -200,6 +200,83 @@ Each entry: Phase, timestamp, category, event, fix, status.
   - Total automated test suite now at 112 passing tests, 1 skipped.
 - **Status**: resolved
 
+---
+
+## Phase 7: Expert Audit Hardening, Strict Quality Gates & Anti-Regression Matrix Suite
+
+### [Phase 7] [2026-10-15 07:10] — Task 1: Currency Hardcoding & Formatting Single Source of Truth
+- **Root Cause**: Frontend components (`CaseDetail.jsx`, `CreditsTab.jsx`, `EngineTab.jsx`, `InvestigationTab.jsx`, `EvidenceModal.jsx`) hardcoded the `$` symbol, preventing dynamic multi-currency display (EUR, GBP, USD). Backend lacked centralized money formatting utilities.
+- **Fix**:
+  - Implemented `frontend/src/utils/money.js` with `formatMoney`, `getCurrencySymbol`, `formatDifference`, and `centsToDollarString`.
+  - Implemented `backend/app/utils/money.py` with `format_money` and `get_currency_symbol`.
+  - Replaced all raw currency symbols and string interpolations across all frontend components.
+  - Implemented strict static AST/regex component guard `frontend/src/tests/currency_guard.test.jsx` (8 tests) preventing any future hardcoded currency literals.
+- **Status**: resolved
+
+### [Phase 7] [2026-10-15 07:11] — Tasks 2 & 3: Recovery Cap Single Source of Truth & Verified Adjustments Ledger
+- **Root Cause**: Recovery caps were either calculated client-side or missing from the Deterministic Engine tab. Unverified adjustments risked reducing the allowable credit cap or being improperly applied without finding review.
+- **Fix**:
+  - Authoritative calculation in `backend/app/services/credit_service.py` via `compute_remaining_cap` and `compute_remaining_cap_from_values`.
+  - Added full breakdown fields: `original_billed_cents`, `recalculated_cents`, `gross_discrepancy_cents`, `verified_adjustments_cents`, `unverified_adjustments_cents`, `total_credits_approved_cents`, `remaining_recoverable_cents`, `allowable_cap_cents`, `approval_eligibility`, and `reason`.
+  - Returns `approval_eligibility="PENDING_REVIEW"` and `reason="Pending review"` before human review.
+  - Unverified adjustments are returned in breakdown but never deduct from cap.
+  - Wired authoritative cap breakdown cards across Engine, Investigation, and Credits tabs.
+  - Validated Reference Golden Case (EUR 125,000c billed, 1,800 units, 76,000c recalculated, -49,000c discrepancy, 10,000c verified adjustment, 39,000c allowable recovery cap) in `backend/tests/test_golden_case_and_ledger.py`.
+- **Status**: resolved
+
+### [Phase 7] [2026-10-15 07:12] — Task 4: Billing Period vs Telemetry Timestamp Quarantine
+- **Root Cause**: `CreateCaseModal.jsx` generated usage event timestamps with the current client clock rather than anchoring within the case's billing window, causing immediate telemetry quarantine. UI lacked visible reasons explaining quarantined telemetry counts.
+- **Fix**:
+  - `CreateCaseModal.jsx` now stamps `event_timestamp` at noon UTC on `periodStart`.
+  - Added frontend validation error preventing `periodStart > periodEnd`.
+  - Surfaced quarantined telemetry counts and exact rejection reasons (e.g. `OUTSIDE_BILLING_PERIOD`, `EXEMPT_ENVIRONMENT`) directly in `EngineTab.jsx`.
+  - Authored `backend/tests/test_period_telemetry.py` (5 tests) verifying boundary conditions, timezone normalization, and quarantine handling.
+- **Status**: resolved
+
+### [Phase 7] [2026-10-15 07:13] — Task 5: AI Quality Gates & Hypotheses Grounding
+- **Root Cause**: When telemetry was missing, corrupted, or non-deterministic, AI models could hallucinate underlying technical root causes. Models also generated unnecessary questions when discrepancies were already deterministically confirmed.
+- **Fix**:
+  - In `backend/app/agent/validator.py`: `validate_hypotheses_grounding` verifies claims against telemetry evidence; ungrounded hypotheses are safely replaced with `"Cause cannot be determined from the provided evidence"`.
+  - Automatically deduplicates and suppresses evidence questions when the finding is `CONFIRMED_CALCULATION_DISCREPANCY` with complete telemetry.
+  - Enhanced monetary parser `extract_monetary_amounts_cents` with `parse_words_to_number` to parse spelled-out numbers ("five thousand dollars", "EUR 5000", "5,000 USD", "$5,000").
+  - Authored comprehensive test suite `backend/tests/test_ai_quality_gates.py` (14 tests).
+- **Status**: resolved
+
+### [Phase 7] [2026-10-15 07:14] — Task 6: Deployment Correctness & Alembic Migrations
+- **Root Cause**: Initial schema migration failed on existing PostgreSQL databases due to duplicate `CREATE TYPE` invocations on enum columns. Uncaught investigation failures could leave runs indefinitely in `PENDING` state. Lack of automated schema drift checks in CI.
+- **Fix**:
+  - Updated initial migration `backend/migrations/versions/7aa7027ee786_initial_schema.py` to use `postgresql.ENUM(..., create_type=False)`.
+  - Guaranteed failed investigations are recorded as `FAILED` with an immutable audit event via a `finally:` block in `graph.py` and routers.
+  - Added GitHub Actions workflow steps for PostgreSQL clean migration, `alembic check` drift verification, and API smoke testing (`backend/tests/test_api_smoke.py`).
+- **Status**: resolved
+
+### [Phase 7] [2026-10-15 07:15] — Task 7: Security & Test Hygiene
+- **Root Cause**: Plain `pytest` failed without manual environment variables. Default demo tokens risked being exposed or used in production. Token comparison was vulnerable to timing attacks. Production deployments lacked explicit mock-fallback prevention.
+- **Fix**:
+  - `backend/tests/conftest.py` configures `LLM_MODE=mock` and safe test defaults, ensuring plain `pytest` runs cleanly without env vars.
+  - `backend/app/config.py`: `demo_mode` defaults to `False` in production; startup barrier blocks startup if default tokens are detected.
+  - `backend/app/middleware/auth.py`: constant-time authentication comparison using `secrets.compare_digest`.
+  - `render.yaml`: explicitly set `ALLOW_MOCK_FALLBACK: "false"` and `DEMO_MODE: "false"`.
+  - Frontend: disabled demo token fallback in production builds unless `VITE_DEMO_MODE=true` is set; prominent `Template analysis, not AI` banner displayed if fallback is ever engaged.
+- **Status**: resolved
+
+### [Phase 7] [2026-10-15 07:16] — Anti-Regression Scenario Matrix Suite (Hypothesis Property Testing)
+- **Suite**: Authored `backend/tests/test_anti_regression_matrix.py` (36 tests) enforcing 7 financial invariants via Hypothesis:
+  1. No Negative Cap: `remaining_recoverable_cents >= 0` always.
+  2. Monotonic Crediting: `approved_credits <= gross_discrepancy - verified_adjustments`.
+  3. Verified-Only Adjustment Deduction: unverified adjustments never reduce recovery cap.
+  4. Currency Invariance: identical calculation and cap behavior across USD, EUR, and GBP.
+  5. Gate Precedence: credit approval requires `CONFIRMED_CALCULATION_DISCREPANCY` and accepted human review.
+  6. Idempotency Key Invariance: repeated approvals with identical key return 409 and credit once.
+  7. Audit Immutability: events and credit records are strictly append-only.
+- **Matrix**: 21 end-to-end integration scenarios across all 7 contract pricing rules (`TIERED_GRADUATED`, `TIERED_VOLUME`, `PER_UNIT`, `FLAT`, `INCLUDED_UNITS`, `DISCOUNT_PCT`, `MINIMUM_COMMIT`) and 3 currencies (`USD`, `EUR`, `GBP`).
+- **Overall Quality Verification**:
+  - Backend: 233 passed, 1 skipped (live Postgres) in 21s.
+  - Frontend: 0 lint errors/warnings, 23 passed unit tests, clean production build in 765ms.
+  - Total test count: 256 automated tests.
+- **Status**: resolved
+
+
 
 
 

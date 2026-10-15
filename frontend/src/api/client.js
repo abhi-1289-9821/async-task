@@ -12,8 +12,13 @@ const API_BASE = (
     : '')
 ).replace(/\/$/, '');
 
+export const isDemoMode = Boolean(
+  import.meta.env?.DEV || import.meta.env?.VITE_DEMO_MODE === 'true'
+);
+
 // Tokens are strictly user-supplied or loaded from session/localStorage.
-// In dev mode only (import.meta.env.DEV), falls back to VITE_DEV_REVIEWER_TOKEN / VITE_DEV_VIEWER_TOKEN if present.
+// In dev or demo mode, falls back to demo evaluation tokens if not user-saved.
+// In production builds, returns empty string unless VITE_DEMO_MODE is explicitly enabled.
 export function getToken(role = currentRole) {
   if (role === 'REVIEWER') {
     const saved = localStorage.getItem('billing_reviewer_token') || sessionStorage.getItem('billing_reviewer_token');
@@ -21,14 +26,14 @@ export function getToken(role = currentRole) {
     if (import.meta.env?.VITE_DEV_REVIEWER_TOKEN) {
       return import.meta.env.VITE_DEV_REVIEWER_TOKEN.trim();
     }
-    return 'demo-reviewer-token-2026';
+    return isDemoMode ? 'demo-reviewer-token-2026' : '';
   }
   const savedViewer = localStorage.getItem('billing_viewer_token') || sessionStorage.getItem('billing_viewer_token');
   if (savedViewer) return savedViewer.trim();
   if (import.meta.env?.VITE_DEV_VIEWER_TOKEN) {
     return import.meta.env.VITE_DEV_VIEWER_TOKEN.trim();
   }
-  return 'demo-viewer-token-2026';
+  return isDemoMode ? 'demo-viewer-token-2026' : '';
 }
 
 export function hasActiveToken(role = currentRole) {

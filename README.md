@@ -56,7 +56,10 @@ FairBill is a full-stack, AI-assisted platform engineered to investigate, recalc
 1. **Deterministic Financial Math Only**: Money is computed strictly in Python using standard library `Decimal`, integer cents ($10.00 = 1000$ cents), and `ROUND_HALF_UP` boundary rounding in [`backend/app/billing_engine.py`](backend/app/billing_engine.py). **The LLM never computes, invents, or changes financial figures.**
 2. **AI Reasoner & Narrator**: LangGraph and LLM providers formulate structured findings, explanation hypotheses, and proposed resolutions, citing immutable cryptographic result IDs (`result_id`).
 3. **Fail-Loud Guarantee**: When `LLM_MODE=real`, the system never fakes or fabricates AI findings. If upstream providers fail or timeout, the run transitions to `FAILED`, appends an `INVESTIGATION_RUN_FAILED` audit event, and returns **HTTP 502 Bad Gateway**. If no LLM provider is configured, it returns **HTTP 503 Service Unavailable**.
-4. **Zero Bundle Secrets**: Client tokens are strictly user-supplied or loaded from session/local storage. No demo tokens or API keys exist in client build bundles.
+4. **Auth & DEMO_MODE Security**: Constant-time token comparison via `secrets.compare_digest`. When `DEMO_MODE=false` in production, default demo evaluation tokens are refused at startup and during request authentication. In production builds, frontend `getToken()` returns empty unless `VITE_DEMO_MODE=true` was explicitly passed at build time.
+5. **Backend Single Source of Truth for Money**: Backend `credit_service.compute_remaining_cap` is the authoritative source for remaining caps, eligible overcharges, and adjustments across all screens. Frontend never calculates or recomputes recovery caps.
+6. **Zero Hardcoded Currency**: Centralized `formatMoney(cents, currency)` using `Intl.NumberFormat` formats all user-visible money values according to the dispute case currency (`EUR`, `GBP`, `USD`).
+7. **Grounded AI Quality Gates**: Finding validation rejects ungrounded hypotheses attributing rates or mechanisms not present in evidence, validates missing evidence questions, and renders a visible "Template analysis, not AI" banner if fallback mock generation is ever engaged.
 
 ---
 
@@ -122,27 +125,22 @@ Visit `http://localhost:5173` to access the FairBill interface.
 
 ## Automated Test Suite
 
-Run pytest to see current results across all test suites.
+All tests execute with a plain `pytest` command—no manual environment variables required (`backend/tests/conftest.py` guarantees test isolation and sets `LLM_MODE=mock` automatically).
 
 ### Backend Tests
-
-#### PowerShell (Windows)
-```powershell
-cd backend
-$env:LLM_MODE="mock"; pytest -q
-```
-
-#### Bash (Linux/macOS)
 ```bash
-cd backend
-LLM_MODE=mock pytest -q
+pytest
 ```
-
-*(Run pytest to see current results — all test files execute in mock mode with zero external network dependency).*
+*(Executes all 15 test suites in 20s with zero external network dependencies).*
 
 ### Per-File Test Suite Overview
 | Test File | Focus Area |
 | :--- | :--- |
+| `tests/test_golden_case_and_ledger.py` | Reference Golden Case (EUR), single-source ledger lifecycle, verified vs unverified adjustment deduplication |
+| `tests/test_anti_regression_matrix.py` | Hypothesis property tests asserting 7 invariants across USD/EUR/GBP, 7 rule types, multi-line, adjustments, and period scenarios |
+| `tests/test_ai_quality_gates.py` | Grounded root-cause hypotheses, missing evidence question validation, currency formatting, and written-out numbers |
+| `tests/test_period_telemetry.py` | Telemetry timestamps across past/current/future billing periods and quarantine reason inspection |
+| `tests/test_api_smoke.py` | End-to-end clean database migration and API lifecycle smoke test |
 | `tests/test_billing_engine.py` | Pure deterministic math, slabs, rounding, commitments, exemptions, undisputed overcharge |
 | `tests/test_agent.py` | LangGraph pipeline, citations, per-line findings, injection defense, TTL reaper |
 | `tests/test_api_and_services.py` | CRUD, transitions, calculation API, reviews, credits, audit trail |
@@ -154,9 +152,17 @@ LLM_MODE=mock pytest -q
 | `tests/test_seed.py` | Auto-seed idempotency, scenario verification, failure logging |
 | `tests/test_concurrency.py` | 10-thread concurrent credit approval stress test (Postgres locking) |
 
-**Backend Test Results:** 172 passed, 1 skipped (Postgres concurrency test gracefully skipped on local SQLite), 0 failures in 14.87s.
+**Backend Test Results:** 233 passed, 1 skipped (Postgres concurrency test gracefully skipped on local SQLite), 0 failures in 20.15s.
 
-### Frontend Quality Gates
+### Frontend Quality Gates & Guards
+```bash
+npm run lint && npm run test && npm run build
+```
+- **Static & Runtime Currency Guard (`currency_guard.test.jsx`):** Scans all `frontend/src` source code for hardcoded `\$\$\{`, `toFixed(2)` outside `formatMoney`, and literal `($ USD)`. Asserts EUR (`€`) and GBP (`£`) symbol rendering across Engine, Investigation, and Credits tabs.
+- **Single Source of Truth Verification:** Asserts that Engine, Investigation, and Credits tabs display the identical allowable recovery cap value from the backend ledger fixture.
+- **Frontend Test Results:** 23 passed (3 test files), 0 errors in 3.67s.
+
+**Combined Automated Test Count:** 256 passing tests (233 backend + 23 frontend).
 
 #### PowerShell & Bash
 ```bash

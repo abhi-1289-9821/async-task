@@ -1,12 +1,15 @@
 import React from 'react';
 import { Lock } from 'lucide-react';
+import { formatMoney, getCurrencySymbol } from '../../utils/money';
 
 export default function CreditsTab({
   calculation,
   findings,
   credits,
   capInfo,
+  capLedger,
   caseData,
+  currency: propCurrency,
   selectedLineId,
   setSelectedLineId,
   creditAmountDollars,
@@ -21,6 +24,11 @@ export default function CreditsTab({
   actionLoading,
   formatCents,
 }) {
+  const ledger = capLedger || capInfo;
+  const currency = propCurrency || caseData?.currency || ledger?.currency || 'USD';
+  const format = (cents) => (formatCents ? formatCents(cents, currency) : formatMoney(cents, currency));
+  const currSymbol = getCurrencySymbol(currency);
+
   const currentLineResult = calculation?.line_results?.find(lr => lr.line_id === selectedLineId);
   const lineFinding = findings.find(f => (f.invoice_line_id && f.invoice_line_id === selectedLineId) || (currentLineResult?.id && f.calculation_line_result_id === currentLineResult.id))
     || findings.find(f => f.invoice_line_id === selectedLineId)
@@ -28,17 +36,17 @@ export default function CreditsTab({
   const latestReview = lineFinding?.reviews && lineFinding.reviews.length > 0 ? lineFinding.reviews[0] : null;
   const isAcceptedFinding = latestReview?.action === 'ACCEPT';
 
-  const originalBilledCents = capInfo?.original_billed_cents ?? currentLineResult?.original_amount_cents ?? 0;
-  const recalculatedCents = capInfo?.recalculated_cents ?? currentLineResult?.recalculated_amount_cents;
-  const grossDiffCents = capInfo?.gross_discrepancy_cents ?? currentLineResult?.difference_cents;
-  const eligibleOverchargeCents = capInfo?.eligible_cents ?? (currentLineResult && currentLineResult.difference_cents < 0 ? Math.abs(currentLineResult.difference_cents) : 0);
-  const priorLineCreditsCents = capInfo?.prior_credits_cents ?? 0;
-  const lineAdjustmentsCents = capInfo?.line_adjustments_cents ?? 0;
-  const caseWideAdjustmentsCents = capInfo?.case_wide_adjustments_cents ?? 0;
-  const remainingLineCapCents = capInfo?.remaining_cap_cents ?? Math.max(0, eligibleOverchargeCents - priorLineCreditsCents);
+  const originalBilledCents = ledger?.original ?? ledger?.original_billed_cents ?? currentLineResult?.original_amount_cents ?? 0;
+  const recalculatedCents = ledger?.recalculated ?? ledger?.recalculated_cents ?? currentLineResult?.recalculated_amount_cents;
+  const grossDiffCents = ledger?.gross_discrepancy ?? ledger?.gross_discrepancy_cents ?? currentLineResult?.difference_cents;
+  const eligibleOverchargeCents = ledger?.eligible_overcharge ?? ledger?.eligible_cents ?? (currentLineResult && currentLineResult.difference_cents < 0 ? Math.abs(currentLineResult.difference_cents) : 0);
+  const priorLineCreditsCents = ledger?.prior_credits ?? ledger?.prior_credits_cents ?? 0;
+  const verifiedAdjustmentsCents = ledger?.verified_adjustments ?? ((ledger?.line_adjustments_cents ?? 0) + (ledger?.case_wide_adjustments_cents ?? 0));
+  const remainingLineCapCents = ledger?.remaining_cap ?? ledger?.remaining_cap_cents ?? 0;
 
   const isInsufficient = currentLineResult?.finding_type === 'INSUFFICIENT_DATA' || grossDiffCents == null;
-  const unverifiedClaimCents = capInfo?.unverified_adjustments_cents ?? 0;
+  const unverifiedClaimCents = ledger?.unverified_adjustments ?? ledger?.unverified_adjustments_cents ?? 0;
+  const isPendingReview = ledger?.approval_eligibility === 'PENDING_REVIEW' || (!isAcceptedFinding && !isInsufficient);
 
   const targetFindingLineId = lineFinding?.invoice_line_id || (calculation?.line_results?.find(lr => lr.id === lineFinding?.calculation_line_result_id)?.line_id);
   const isLineMismatch = Boolean(targetFindingLineId && selectedLineId && targetFindingLineId !== selectedLineId);
@@ -55,7 +63,7 @@ export default function CreditsTab({
   } else if (isLineMismatch) {
     disableReason = `Selected line (${selectedLineId}) does not match finding line (${targetFindingLineId})`;
   } else if (remainingLineCapCents <= 0) {
-    disableReason = 'Remaining allowable credit cap is $0.00';
+    disableReason = `Remaining allowable credit cap is ${format(0)}`;
   }
 
   const matchingOption = (resolutionOptions || []).find(o => (o.invoice_line_id === selectedLineId || o.calculation_line_result_id === lineFinding?.calculation_line_result_id) && (o.option_type === 'RECOMMEND_CREDIT' || o.option_type === 'CREDIT_UNDISPUTED_PORTION'))
@@ -92,7 +100,7 @@ export default function CreditsTab({
             <div>
               <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>1. Original Billed</div>
               <div className="font-mono" style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '1.1rem', marginTop: '2px' }}>
-                {formatCents(originalBilledCents)}
+                {format(originalBilledCents)}
               </div>
             </div>
 
@@ -103,7 +111,7 @@ export default function CreditsTab({
                 {isInsufficient ? (
                   <span style={{ color: 'var(--status-rust)', fontSize: '0.9rem' }}>Unavailable</span>
                 ) : recalculatedCents != null ? (
-                  formatCents(recalculatedCents)
+                  format(recalculatedCents)
                 ) : (
                   <span style={{ color: 'var(--status-amber)', fontSize: '0.9rem' }}>Ambiguous</span>
                 )}
@@ -117,9 +125,9 @@ export default function CreditsTab({
                 {isInsufficient ? (
                   <span style={{ fontSize: '0.9rem' }}>Uncomputed</span>
                 ) : grossDiffCents != null ? (
-                  `${grossDiffCents < 0 ? '-' : '+'}${formatCents(Math.abs(grossDiffCents))} ${grossDiffCents < 0 ? '(Overcharge)' : '(Undercharge)'}`
+                  `${grossDiffCents < 0 ? '-' : '+'}${format(Math.abs(grossDiffCents))} ${grossDiffCents < 0 ? '(Overcharge)' : '(Undercharge)'}`
                 ) : (
-                  formatCents(eligibleOverchargeCents)
+                  format(eligibleOverchargeCents)
                 )}
               </div>
             </div>
@@ -128,7 +136,7 @@ export default function CreditsTab({
             <div>
               <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>4. Confirmed Adjustments</div>
               <div className="font-mono" style={{ fontWeight: 700, color: 'var(--ink-muted)', fontSize: '1.1rem', marginTop: '2px' }}>
-                {formatCents(priorLineCreditsCents + lineAdjustmentsCents + caseWideAdjustmentsCents)}
+                {format(priorLineCreditsCents + verifiedAdjustmentsCents)}
               </div>
             </div>
 
@@ -136,7 +144,7 @@ export default function CreditsTab({
             <div>
               <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>5. Eligible Overcharge</div>
               <div className="font-mono" style={{ fontWeight: 700, color: isInsufficient ? 'var(--status-rust)' : 'var(--ink)', fontSize: '1.1rem', marginTop: '2px' }}>
-                {isInsufficient ? '$0.00' : formatCents(eligibleOverchargeCents)}
+                {isInsufficient ? format(0) : format(eligibleOverchargeCents)}
               </div>
             </div>
 
@@ -151,8 +159,8 @@ export default function CreditsTab({
             {/* 7. Currently Approvable Maximum (Remaining Cap) */}
             <div>
               <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>7. Allowable Credit Cap</div>
-              <div className="font-mono" style={{ fontWeight: 800, color: (!isInsufficient && remainingLineCapCents > 0) ? 'var(--status-green)' : 'var(--status-rust)', fontSize: '1.25rem', marginTop: '2px' }}>
-                {isInsufficient ? '$0.00' : formatCents(remainingLineCapCents)}
+              <div className="font-mono" style={{ fontWeight: 800, color: (!isInsufficient && remainingLineCapCents > 0 && isAcceptedFinding) ? 'var(--status-green)' : 'var(--status-rust)', fontSize: '1.25rem', marginTop: '2px' }}>
+                {isInsufficient ? format(0) : (isPendingReview ? 'Pending review' : format(remainingLineCapCents))}
               </div>
             </div>
 
@@ -160,14 +168,14 @@ export default function CreditsTab({
             <div>
               <div style={{ fontSize: '0.72rem', color: 'var(--ink-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>8. Issued Credit Ledger</div>
               <div className="font-mono" style={{ fontWeight: 700, color: 'var(--ink)', fontSize: '1.1rem', marginTop: '2px' }}>
-                {formatCents(priorLineCreditsCents)}
+                {format(priorLineCreditsCents)}
               </div>
             </div>
           </div>
 
           {unverifiedClaimCents > 0 && (
             <div style={{ marginTop: '1rem', paddingTop: '0.75rem', borderTop: '1px solid var(--line-subtle)', fontSize: '0.8rem', color: 'var(--status-rust)' }}>
-              <strong>Note on Alleged Claims:</strong> Unverified customer allegations of {formatCents(unverifiedClaimCents)} are kept separate and not counted as confirmed credits against the cap.
+              <strong>Note on Alleged Claims:</strong> Unverified customer allegations of {format(unverifiedClaimCents)} are kept separate and not counted as confirmed credits against the cap.
             </div>
           )}
         </div>
@@ -182,24 +190,18 @@ export default function CreditsTab({
               onChange={(e) => {
                 const newLineId = e.target.value;
                 setSelectedLineId(newLineId);
-                const targetLr = calculation?.line_results?.find(r => r.line_id === newLineId);
-                if (targetLr && targetLr.difference_cents < 0) {
-                  const prior = credits.filter(c => c.invoice_line_id === newLineId).reduce((s, c) => s + (c.amount_cents || 0), 0);
-                  const rem = Math.max(0, Math.abs(targetLr.difference_cents) - prior);
-                  setCreditAmountDollars((rem / 100).toFixed(2));
-                }
               }}
             >
               {caseData?.invoice_lines?.map((line) => (
                 <option key={line.id} value={line.id}>
-                  {line.id} — {line.description} ({formatCents(line.original_amount_cents)})
+                  {line.id} — {line.description} ({format(line.original_amount_cents)})
                 </option>
               ))}
             </select>
           </div>
 
           <div>
-            <label className="form-label">Approved Credit Amount ($ USD)</label>
+            <label className="form-label">Approved Credit Amount ({currSymbol})</label>
             <input
               type="number"
               step="0.01"
@@ -207,10 +209,10 @@ export default function CreditsTab({
               className="form-input"
               value={creditAmountDollars}
               onChange={(e) => setCreditAmountDollars(e.target.value)}
-              placeholder="e.g. 25.00"
+              placeholder={isPendingReview ? 'Pending review' : 'e.g. 25.00'}
             />
             <div style={{ fontSize: '0.75rem', color: 'var(--ink-muted)', marginTop: '0.25rem' }}>
-              Defaults to remaining allowable cap: {formatCents(remainingLineCapCents)}
+              Defaults to remaining allowable cap: {isPendingReview ? 'Pending review' : format(remainingLineCapCents)}
             </div>
           </div>
         </div>
@@ -252,61 +254,66 @@ export default function CreditsTab({
             type="button"
             className="btn btn-primary"
             data-testid="approve-credit-btn"
-            onClick={() => handleApproveCredit(lineFinding?.id, matchingOption?.id || selectedResolutionOptionId)}
-            disabled={Boolean(disableReason) || actionLoading}
+            disabled={actionLoading || Boolean(disableReason) || !isAcceptedFinding || remainingLineCapCents <= 0}
+            onClick={() => handleApproveCredit(matchingOption?.id, lineFinding?.id)}
           >
-            <Lock size={14} />
-            <span>{actionLoading ? 'Locking & Approving...' : 'Approve Credit Under Row Lock'}</span>
+            {actionLoading ? 'Executing Atomic Row-Lock...' : 'Approve Mock Credit & Reconcile Cap'}
           </button>
           {disableReason && (
-            <div className="disabled-reason-hint">
-              <span>⚠ Disabled reason: {disableReason}</span>
+            <div style={{ marginTop: '0.5rem', fontSize: '0.78rem', color: 'var(--status-rust)' }}>
+              {disableReason}
             </div>
           )}
         </div>
       </div>
 
-      <div className="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Credit ID</th>
-              <th>Target Line</th>
-              <th style={{ textAlign: 'right' }}>Amount</th>
-              <th>Reason Code</th>
-              <th>Idempotency Key</th>
-              <th>Approved By</th>
-              <th>Timestamp</th>
-            </tr>
-          </thead>
-          <tbody>
-            {credits.length === 0 ? (
-              <tr>
-                <td colSpan="7" style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--ink-muted)' }}>
-                  No credits approved yet for this case.
-                </td>
-              </tr>
-            ) : (
-              credits.map((c) => (
-                <tr key={c.id}>
-                  <td className="font-mono" style={{ fontWeight: 600 }}>{c.id}</td>
-                  <td className="font-mono">{c.invoice_line_id}</td>
-                  <td className="table-money-cell" style={{ color: 'var(--status-green)' }}>
-                    {formatCents(c.amount_cents)}
-                  </td>
-                  <td>{c.reason_code}</td>
-                  <td className="font-mono" style={{ fontSize: '0.72rem' }}>
-                    {c.idempotency_key?.slice(0, 16)}...
-                  </td>
-                  <td>{c.approved_by}</td>
-                  <td style={{ fontSize: '0.8rem', color: 'var(--ink-muted)' }}>
-                    {new Date(c.approved_at || c.created_at).toLocaleString()}
-                  </td>
+      {/* Credit History Table */}
+      <div className="card" style={{ padding: '2rem' }}>
+        <h4 style={{ fontSize: '1.15rem', marginBottom: '0.5rem' }}>Executed Credit Approvals</h4>
+        <p style={{ fontSize: '0.82rem', color: 'var(--ink-secondary)', marginBottom: '1.25rem' }}>
+          Append-only ledger of mock credit decisions recorded in PostgreSQL under transaction serialization.
+        </p>
+
+        {credits.length === 0 ? (
+          <div style={{ color: 'var(--ink-muted)', fontStyle: 'italic', fontSize: '0.85rem' }}>
+            No credits approved for this case yet.
+          </div>
+        ) : (
+          <div className="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Credit ID</th>
+                  <th>Line Item</th>
+                  <th>Amount</th>
+                  <th>Reason Code</th>
+                  <th>Approved By</th>
+                  <th>Idempotency Key</th>
+                  <th>Timestamp</th>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              </thead>
+              <tbody>
+                {credits.map((c) => (
+                  <tr key={c.id}>
+                    <td className="font-mono" style={{ fontSize: '0.75rem', fontWeight: 600 }}>{c.id}</td>
+                    <td>{c.invoice_line_id}</td>
+                    <td className="table-money-cell font-mono" style={{ fontWeight: 700, color: 'var(--status-green)' }}>
+                      {format(c.amount_cents)}
+                    </td>
+                    <td><span className="badge badge-resolved">{c.reason_code}</span></td>
+                    <td style={{ fontSize: '0.8rem' }}>{c.approved_by}</td>
+                    <td className="font-mono" style={{ fontSize: '0.7rem', color: 'var(--ink-muted)' }}>
+                      {c.idempotency_key?.slice(0, 16)}...
+                    </td>
+                    <td className="font-mono" style={{ fontSize: '0.75rem', color: 'var(--ink-muted)' }}>
+                      {new Date(c.approved_at || c.created_at).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

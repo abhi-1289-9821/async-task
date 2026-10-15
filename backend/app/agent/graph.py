@@ -393,7 +393,9 @@ class InvestigationWorkflow:
             finding_diff = target_lr.get("difference_cents", total_diff) if target_lr else total_diff
 
             # 0. Validate raw LLM JSON schema & line result ID against this run
-            payload_passed, sanitized_rf, p_errs = validator.validate_llm_payload(rf, line_results)
+            payload_passed, sanitized_rf, p_errs = validator.validate_llm_payload(
+                rf, line_results, quarantined_events=state.get("quarantined_events", [])
+            )
 
             raw_model_text = rf.get("summary_narrative") or sanitized_rf.get("summary_narrative") or ""
 
@@ -433,11 +435,25 @@ class InvestigationWorkflow:
             f_copy["consistency_check_passed"] = consist_passed
             f_copy["finding_type"] = final_finding_type
 
+            # Task 5b: Validate root-cause hypotheses grounding against contract rules and evidence
+            f_copy["possible_explanations"] = validator.validate_hypotheses_grounding(
+                f_copy.get("possible_explanations") or [],
+                contract_rules=state.get("contract_rules", []),
+                line_results=finding_line_results,
+            )
+
+            # Task 5a: If confirmed discrepancy and complete telemetry, drop any remaining missing_evidence_questions
+            if final_finding_type == "CONFIRMED_CALCULATION_DISCREPANCY" and not state.get("quarantined_events"):
+                f_copy["missing_evidence_questions"] = []
+
             val_notes = list(con_errs) + list(nar_errs) + list(p_errs)
 
             # If model's finding_type differed from engine or narrative failed, replace narrative fields with deterministic engine narrative
+            case_currency = state.get("case_data", {}).get("currency") or "USD"
             if not consist_passed:
-                engine_narrative = validator.generate_engine_narrative(final_finding_type, finding_line_results, finding_calc_status)
+                engine_narrative = validator.generate_engine_narrative(
+                    final_finding_type, finding_line_results, finding_calc_status, currency=case_currency
+                )
                 f_copy["summary_narrative"] = engine_narrative
                 f_copy["narrative"] = engine_narrative
                 f_copy["verified_facts"] = [

@@ -30,7 +30,7 @@ import {
   transitionCase,
   getActiveRole
 } from '../api/client';
-import { formatCents, formatDifference } from '../utils/money';
+import { formatCents, formatDifference, centsToDollarString } from '../utils/money';
 import EvidenceModal from './EvidenceModal';
 import EngineTab from './case-tabs/EngineTab';
 import InvestigationTab from './case-tabs/InvestigationTab';
@@ -112,12 +112,6 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
       if (cData.invoice_lines && cData.invoice_lines.length > 0) {
         const firstLine = cData.invoice_lines[0];
         setSelectedLineId((prev) => prev || firstLine.id);
-        if (cCalcs && cCalcs.length > 0 && cCalcs[0].line_results) {
-          const lr = cCalcs[0].line_results.find(r => r.line_id === firstLine.id);
-          if (lr && lr.difference_cents < 0) {
-            setCreditAmountDollars((Math.abs(lr.difference_cents) / 100).toFixed(2));
-          }
-        }
       }
     } catch (err) {
       onToast('error', err.message || 'Failed to load case data');
@@ -145,10 +139,23 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
   useEffect(() => {
     if (caseId && selectedLineId) {
       getCreditCap(caseId, selectedLineId)
-        .then(setCapInfo)
-        .catch(() => setCapInfo(null));
+        .then((cap) => {
+          setCapInfo(cap);
+          if (cap && cap.approval_eligibility === 'ELIGIBLE' && (cap.remaining_cap > 0 || cap.remaining_cap_cents > 0)) {
+            setCreditAmountDollars(centsToDollarString(cap.remaining_cap ?? cap.remaining_cap_cents));
+          } else {
+            setCreditAmountDollars('');
+          }
+        })
+        .catch(() => {
+          setCapInfo(null);
+          setCreditAmountDollars('');
+        });
     } else {
-      Promise.resolve().then(() => setCapInfo(null));
+      Promise.resolve().then(() => {
+        setCapInfo(null);
+        setCreditAmountDollars('');
+      });
     }
   }, [caseId, selectedLineId, credits.length]);
 
@@ -576,6 +583,8 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
         <EngineTab
           calculation={calculation}
           caseData={caseData}
+          currency={caseData?.currency || 'USD'}
+          capLedger={capInfo}
           handleRunCalculation={handleRunCalculation}
           actionLoading={actionLoading}
           formatCents={formatCents}
@@ -590,6 +599,8 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
           findings={findings}
           calculation={calculation}
           caseData={caseData}
+          currency={caseData?.currency || 'USD'}
+          capLedger={capInfo}
           actionLoading={actionLoading}
           handleTriggerInvestigation={handleTriggerInvestigation}
           setSelectedFinding={setSelectedFinding}
@@ -619,6 +630,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
           credits={credits}
           capInfo={capInfo}
           caseData={caseData}
+          currency={caseData?.currency || 'USD'}
           selectedLineId={selectedLineId}
           setSelectedLineId={setSelectedLineId}
           creditAmountDollars={creditAmountDollars}
@@ -646,6 +658,7 @@ export default function CaseDetail({ caseId, onBack, onToast }) {
         onClose={() => setEvidenceModalOpen(false)}
         caseId={caseId}
         lineId={selectedLineId}
+        currency={caseData?.currency || 'USD'}
         contractRules={caseData?.contract_rules || []}
         invoiceLines={caseData?.invoice_lines || []}
         onEvidenceUploaded={loadAllCaseData}

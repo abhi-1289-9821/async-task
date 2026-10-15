@@ -914,10 +914,13 @@ def _make_insufficient_data_result(
     )
 
 
-def _normalize_datetime(dt: datetime | None) -> datetime | None:
-    """Normalizes naive and timezone-aware datetimes to UTC-naive for safe, deterministic comparison."""
+def _normalize_datetime(dt: datetime | str | None) -> datetime | None:
+    """Normalizes naive and timezone-aware datetimes and ISO strings to UTC-naive for safe, deterministic comparison."""
     if dt is None:
         return None
+    if isinstance(dt, str):
+        from datetime import timezone
+        dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
     if getattr(dt, "tzinfo", None) is not None:
         from datetime import timezone
         return dt.astimezone(timezone.utc).replace(tzinfo=None)

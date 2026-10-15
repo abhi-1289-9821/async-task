@@ -560,12 +560,18 @@ export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
 
       const usageEvents = [];
       if (includeVerifiedUsage && verifiedQuantity) {
+        let eventTimestamp = new Date().toISOString();
+        if (periodStart) {
+          const d = new Date(periodStart);
+          d.setUTCHours(12, 0, 0, 0);
+          eventTimestamp = d.toISOString();
+        }
         usageEvents.push({
           id: `ev-${caseId}-prod-1`,
           line_id: lineId,
           quantity: parseFloat(verifiedQuantity),
           environment: verifiedEnvironment || 'production',
-          event_timestamp: new Date().toISOString(),
+          event_timestamp: eventTimestamp,
         });
         if (selectedScenario === 'case-2') {
           usageEvents.push({
@@ -573,7 +579,7 @@ export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
             line_id: lineId,
             quantity: 200.0,
             environment: 'staging',
-            event_timestamp: new Date().toISOString(),
+            event_timestamp: eventTimestamp,
           });
         } else if (selectedScenario === 'case-3') {
           usageEvents.push({
@@ -581,7 +587,7 @@ export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
             line_id: lineId,
             quantity: 100.0,
             environment: 'staging',
-            event_timestamp: new Date().toISOString(),
+            event_timestamp: eventTimestamp,
           });
         } else if (selectedScenario === 'case-5') {
           usageEvents.push({
@@ -589,7 +595,7 @@ export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
             line_id: lineId,
             quantity: 2000.0,
             environment: 'staging',
-            event_timestamp: new Date().toISOString(),
+            event_timestamp: eventTimestamp,
           });
         }
       }
@@ -811,6 +817,11 @@ export default function CreateCaseModal({ isOpen, onClose, onCaseCreated }) {
                 />
               </div>
             </div>
+            {periodStart && periodEnd && periodStart > periodEnd && (
+              <div style={{ color: 'var(--status-rust)', fontSize: '0.8rem', marginTop: '-0.35rem', marginBottom: '0.85rem' }} role="alert">
+                Billing period end date cannot be before start date.
+              </div>
+            )}
 
             <div className="form-group" style={{ marginBottom: '0.85rem' }}>
               <label className="form-label">Dispute Title</label>

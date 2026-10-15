@@ -6,16 +6,19 @@ FairBill is a full-stack, AI-assisted platform engineered to investigate, recalc
 
 ## Reviewer Access & Quick Start
 
-> **Production Credentials**: Reviewer and viewer tokens are pre-configured and work out-of-the-box. Visitors and automated evaluation suites are automatically authenticated as Reviewer by default.
+> **Live Evaluation Credentials**: The live deployment is deliberately configured in **Evaluation Demo Mode** (`DEMO_MODE=true` / `VITE_DEMO_MODE=true`) so visitors and automated evaluator suites are automatically authenticated as Reviewer by default without requiring manual credential entry.
 >
-> - **Primary Deployed Full-Stack URL (Render + PostgreSQL):** **`https://fairbill-hrrg.onrender.com`**
+> - **Primary Deployed Full-Stack URL (Render + Neon PostgreSQL):** **`https://fairbill-hrrg.onrender.com`**
 > - **Backup / Mirror URL (Vercel):** `https://fairbill-1289.vercel.app`
+> - **Database:** Hosted **Neon PostgreSQL** (`postgresql+psycopg2://...`), providing durable storage for cases, evidence versions, and append-only audit trails.
 > - **Reviewer Token:** `demo-reviewer-token-2026` (Full access: recalculate, trigger AI investigations, review findings, approve credits)
 > - **Viewer Token:** `demo-viewer-token-2026` (Read-only access: view cases, calculations, evidence, audit log)
+>
+> ⚠️ **Render Free-Tier Cold Starts**: On Render's free tier, instances spin down after 15 minutes of inactivity. When accessed after being idle, Render displays a temporary "Service waking up / Application loading" initialization screen for **~45 seconds** while compute resources are allocated. Once warmed up, all requests respond with normal sub-second latencies. (Pinging `/healthz` on a scheduled interval keeps the instance permanently warm).
 
 ### Quick Start
 1. Open the application directly at **`https://fairbill-hrrg.onrender.com`** (authenticated automatically, or pass `?token=demo-reviewer-token-2026`).
-2. Explore any of the **12 real-world dispute cases** (e.g., `case-1-acme-a` through `case-7-golf`, `case-acme-unverified`, `case-bravo-102`).
+2. Explore any of the **12 real-world dispute cases** (e.g., `case-1-acme-a` through `case-7-golf`, `case-acme-unverified`, `case-acme-101`, `case-bravo-102`).
 3. Click **Run Billing Engine** to test the pure deterministic Python calculation engine, or **Trigger AI Investigation** to run the multi-node LangGraph pipeline.
 4. Review findings, inspect evidence citations, and approve concurrency-safe credits under row-level locks and cumulative caps.
 
@@ -33,7 +36,7 @@ FairBill is a full-stack, AI-assisted platform engineered to investigate, recalc
          ▼                                             ▼                                             ▼
 ┌─────────────────────────────────┐       ┌─────────────────────────────────┐       ┌─────────────────────────────────┐
 │     Deterministic Engine        │       │      Agentic Investigation      │       │     Credit Approval Service     │
-│  (backend/app/billing_engine.py)│       │     (LangGraph Multi-Node)      │       │  (backend/app/credit_service.py)│
+│  (backend/app/billing_engine.py)│       │     (LangGraph Multi-Node)      │       │(backend/app/services/credit_service.py)│
 │  - Integer cents arithmetic     │       │  - Multi-provider fallback      │       │  - Row-level lock concurrency   │
 │  - Graduated vs Volume slabs    │       │  - Per-line finding synthesis   │       │  - Shared compute_remaining_cap │
 │  - Included units & overage     │       │  - Citation & amount validators │       │  - SHA-256 idempotency key      │
@@ -152,7 +155,7 @@ pytest
 | `tests/test_seed.py` | Auto-seed idempotency, scenario verification, failure logging |
 | `tests/test_concurrency.py` | 10-thread concurrent credit approval stress test (Postgres locking) |
 
-**Backend Test Results:** 233 passed, 1 skipped (Postgres concurrency test gracefully skipped on local SQLite), 0 failures in 20.15s.
+**Backend Test Results:** 233 passed, 1 skipped (Postgres concurrency test gracefully skipped on local SQLite), 0 failures in 21.77s.
 
 ### Frontend Quality Gates & Guards
 ```bash
@@ -160,16 +163,16 @@ npm run lint && npm run test && npm run build
 ```
 - **Static & Runtime Currency Guard (`currency_guard.test.jsx`):** Scans all `frontend/src` source code for hardcoded `\$\$\{`, `toFixed(2)` outside `formatMoney`, and literal `($ USD)`. Asserts EUR (`€`) and GBP (`£`) symbol rendering across Engine, Investigation, and Credits tabs.
 - **Single Source of Truth Verification:** Asserts that Engine, Investigation, and Credits tabs display the identical allowable recovery cap value from the backend ledger fixture.
-- **Frontend Test Results:** 23 passed (3 test files), 0 errors in 3.67s.
+- **Frontend Test Results:** 23 passed (3 test files: `currency_guard.test.jsx`, `components.test.jsx`, `review_and_evidence.test.jsx`), 0 errors in 4.03s.
 
 **Combined Automated Test Count:** 256 passing tests (233 backend + 23 frontend).
 
 #### PowerShell & Bash
 ```bash
 cd frontend
-npm run lint    # oxlint: 0 warnings, 0 errors in 77ms
-npm test        # Vitest + React Testing Library (15 tests across 2 suites, all passing in 2.75s)
-npm run build   # Production bundle verification (built in 596ms, 0 errors)
+npm run lint    # oxlint: 0 warnings, 0 errors in 119ms
+npm test        # Vitest + React Testing Library (23 tests across 3 test files, all passing in 4.03s)
+npm run build   # Production bundle verification (built in 549ms, 0 errors)
 ```
 
 ---
@@ -209,48 +212,42 @@ npm run build   # Production bundle verification (built in 596ms, 0 errors)
 On startup against an empty database, `backend/app/seed.py` idempotently seeds 12 comprehensive dispute scenarios (the 7 benchmark dispute scenarios + 5 foundational regression scenarios):
 
 ### Benchmark Dispute Scenarios
-1. **`case-acme-a-1042` — Acme A: Missing Evidence, Unverified Usage & Claimed Prior Credit**
+1. **`case-1-acme-a` — Acme A: Missing Evidence, Unverified Usage & Claimed Prior Credit**
    - **Contract Rule:** `PER_UNIT` at 12 cents/unit; `exempt_environments: ["staging", "development"]`.
    - **Billed Amount:** $180.00 (1,500 units billed).
    - **Dispute:** Customer asserts 1,200 units and demands a $20 support credit promise.
    - **Usage Telemetry:** None verified in system.
    - **What it demonstrates:** Engine status **`INSUFFICIENT_DATA`**. The system strictly refuses to calculate money or approve credits from customer claims alone without verified telemetry.
-2. **`case-beta-b-2091` — Beta B: Graduated Tier Boundary Step Precision**
-   - **Contract Rule:** `TIERED_GRADUATED` (0-1,000 @ 20c; 1,001-5,000 @ 15c; 5,001+ @ 10c).
-   - **Billed Amount:** $900.00 (90,000 cents).
-   - **Usage Telemetry:** Exactly 5,000 verified production units.
-   - **What it demonstrates:** Exact slab boundary precision. Correct calculation is $200.00 (first 1,000) + $600.00 (next 4,000) = $800.00. Result: **$100.00 confirmed overcharge**.
-3. **`case-bravo-c-3105` — Bravo C: Contractual Ambiguity with Undisputed Partial Recovery**
-   - **Contract Rule:** Competing `TIERED_GRADUATED` ($25.00) vs `TIERED_VOLUME` ($20.00) rules on the same line.
-   - **Billed Amount:** $40.00 (4,000 cents).
+2. **`case-2-acme-b` — Acme B: Verified Graduated-Tier Overcharge**
+   - **Contract Rule:** `TIERED_GRADUATED` (0-500 @ 80c; 501-1,000 @ 45c; 1,001+ @ 25c).
+   - **Billed Amount:** $950.00 (95,000 cents).
+   - **Usage Telemetry:** Exactly 1,200 verified production units ($675.00 recalculated).
+   - **What it demonstrates:** Exact graduated slab step calculation ($400 + $225 + $50 = $675.00), yielding a confirmed **$275.00 overcharge discrepancy**.
+3. **`case-3-bravo` — Bravo: Conflicting Contract Amendments at Tier Threshold**
+   - **Contract Rule:** Competing `TIERED_GRADUATED` vs `TIERED_VOLUME` amendments at volume threshold.
+   - **Billed Amount:** $400.00 (40,000 cents).
    - **Usage Telemetry:** 200 production units.
-   - **What it demonstrates:** Engine status **`AMBIGUOUS`**. Both valid contractual interpretations are computed and stored. The deterministic engine calculates the undisputed minimum overcharge ($40 - $25 = **$15.00**), enabling immediate partial credit while the remainder awaits contractual amendment.
-4. **`case-gamma-d-4401` — Gamma D: Credit Cap Enforcement with Prior Courtesy Adjustment**
-   - **Contract Rule:** `PER_UNIT` at 10 cents/unit.
-   - **Billed Amount:** $80.00 (8,000 cents).
-   - **Usage Telemetry:** 500 verified production units ($50.00 recalculated).
-   - **Prior Adjustment:** $5.00 (500 cents) prior courtesy credit.
-   - **What it demonstrates:** Gross overcharge is $30.00. Cap endpoint and credit service enforce cumulative cap deduction ($30.00 - $5.00 = **$25.00 remaining cap**).
-5. **`case-delta-e-5510` — Delta E: Clean Invoice Verification (No Discrepancy)**
-   - **Contract Rule:** `FLAT` at 10,000 cents ($100.00).
-   - **Billed Amount:** $100.00 (10,000 cents).
-   - **What it demonstrates:** Engine status **`OK`** with zero difference cents. Proves clean reconciliation where no credit is eligible.
-6. **`case-epsilon-f-6620` — Epsilon F: Minimum Spend Commitment Enforcement**
-   - **Contract Rule:** `MINIMUM_COMMIT` of $500.00 with $0.10/unit overage.
-   - **Billed Amount:** $600.00.
-   - **Usage Telemetry:** 3,000 units ($300.00 metered).
-   - **What it demonstrates:** Engine enforces minimum commitment floor ($500.00), yielding a $100.00 overcharge.
-7. **`case-zeta-g-7730` — Zeta G: Percentage Discount on Eligible Service Lines**
-   - **Contract Rule:** 15% `DISCOUNT_PCT` on eligible compute lines, excluding separate support fees.
-   - **Billed Amount:** Full non-discounted eligible subtotal.
-   - **What it demonstrates:** Accurate percentage discount application order without contaminating excluded service items.
+   - **What it demonstrates:** Engine status **`AMBIGUOUS`**. Both valid contractual interpretations are computed and stored. The deterministic engine calculates the undisputed minimum overcharge, enabling immediate partial credit while the remainder awaits contractual amendment.
+4. **`case-4-delta` — Delta: Fixed Fee, Duplicate Charge, Prior Credit Accounting**
+   - **Contract Rule:** `FLAT` service fee with duplicate billing and prior courtesy adjustment.
+   - **Billed Amount:** $250.00 (25,000 cents).
+   - **What it demonstrates:** Single source of truth cap enforcement subtracting verified adjustments from the gross overcharge.
+5. **`case-5-echo` — Echo: Included Units Allowance & Exempt Environment Removal**
+   - **Contract Rule:** `INCLUDED_UNITS` with environment exemption filtering.
+   - **What it demonstrates:** Clean isolation of staging/dev usage and calculation of billable overage units only above the included allowance.
+6. **`case-6-foxtrot` — Foxtrot: Percentage Discount on Eligible Base & Prompt Injection Resilience**
+   - **Contract Rule:** 15% `DISCOUNT_PCT` on eligible compute lines with an untrusted customer prompt injection attack embedded in dispute text.
+   - **What it demonstrates:** Percentage discount applied accurately; system ignores adversarial prompts attempting to dictate refund amounts.
+7. **`case-7-golf` — Golf: Minimum Commitment Floor & Alleged Waiver**
+   - **Contract Rule:** `MINIMUM_COMMIT` of $500.00 with metered usage below commit.
+   - **What it demonstrates:** Engine enforces minimum commitment floor ($500.00) despite customer claims of verbal waivers.
 
 ### Foundational Regression Cases
-8. **`case-acme-101`**: Staging environment exemption and prior goodwill adjustment deduction.
-9. **`case-bravo-102`**: Dual-clause tier ambiguity with discrete scenario modeling.
-10. **`case-delta-103`**: Flat rate clean invoice verification.
-11. **`case-krypton-ver-01`**: Evidence version bump and stale finding invalidation lifecycle test.
-12. **`case-titan-cap-01`**: Concurrency-safe credit cap deduction test.
+8. **`case-acme-unverified`**: Pure unverified customer usage claim asserting support promises.
+9. **`case-acme-verified`**: Verified usage telemetry with verified credit adjustment ledger accounting.
+10. **`case-acme-101`**: Staging environment exemption and prior goodwill adjustment deduction.
+11. **`case-bravo-102`**: Dual-clause tier ambiguity with discrete scenario modeling.
+12. **`case-delta-103`**: Flat rate clean invoice verification.
 
 ---
 
@@ -298,7 +295,7 @@ Follow this end-to-end journey in the UI to evaluate the complete dispute govern
 | `POST` | `/api/cases/{case_id}/investigations` | Run autonomous investigation (502 on failure, 503 if unconfigured) | **201 / 502 / 503** |
 | `GET` | `/api/cases/{case_id}/investigations` | List investigation runs for a case | **200 OK** |
 | `GET` | `/api/findings/case/{case_id}` | List structured findings and review history | **200 OK** |
-| `POST` | `/api/findings/{id}/review` | Submit human review (`ACCEPT`, `EDIT`, `REJECT`) | **200 OK / 409** |
+| `POST` | `/api/findings/{id}/review` | Submit human review (`ACCEPT`, `EDIT`, `REJECT`) | **201 Created / 409** |
 | `GET` | `/api/credits/case/{case_id}/cap` | Read calculated credit cap and adjustments | **200 OK** |
 | `POST` | `/api/credits/approve` | Approve financial credit under lock and cap | **201 / 400 / 409** |
 | `GET` | `/api/credits/case/{case_id}` | List approved credits for a case | **200 OK** |
@@ -307,13 +304,38 @@ Follow this end-to-end journey in the UI to evaluate the complete dispute govern
 
 ---
 
+## Observability & Structured Logging
+
+The platform incorporates comprehensive end-to-end structured JSON logging for auditing, debugging, and AI transparency:
+- **Request ID Tracking & Correlation (`request_id_ctx`):** Handled via `StructuredLoggingMiddleware` in `backend/app/logging.py`. Every inbound HTTP request is assigned a unique `X-Request-ID` (or adopts incoming headers) propagated through Python `ContextVar`, tagging all downstream logs, database transactions, and agent traces.
+- **LLM Execution Observability (`log_llm_execution`):** Emits structured audit events recording provider name (`gemini`, `groq`, `openrouter`), model string, attempt index, latency in milliseconds, token counts (prompt, completion, total), and success/failure status. Secrets and API keys are strictly redacted via `sanitize_error_message`.
+- **Agent Workflow Node Telemetry (`log_agent_node_execution`):** Records latency, node transitions (`gather_evidence` $\rightarrow$ `run_calculation` $\rightarrow$ `analyze_findings` $\rightarrow$ `formulate_options` $\rightarrow$ `validate_and_sanitize`), and state payload metadata.
+
+---
+
+## Environment Configuration (`.env.example`)
+
+A clean template is provided at [`.env.example`](.env.example):
+- `ENVIRONMENT`: Set to `production` or `development`.
+- `DATABASE_URL`: Hosted PostgreSQL connection string (`postgresql+psycopg2://...`) for production, or SQLite for local testing.
+- `LLM_PROVIDERS`: Ordered fallback list (default: `gemini,groq,openrouter`).
+- `LLM_MODE`: Set to `real` for live inference or `mock` for deterministic test suites.
+- `GEMINI_API_KEY` & `GEMINI_MODEL`: Primary Google GenAI credentials (e.g. `gemini-2.5-flash`).
+- `GROQ_API_KEY` & `GROQ_MODEL`: High-speed fallback provider (e.g. `llama-3.3-70b-versatile`).
+- `OPENROUTER_API_KEY` & `OPENROUTER_MODEL`: Broad fallback provider (e.g. `google/gemini-2.5-flash`).
+- `DEMO_MODE`: `true` for evaluation demo builds with auto-authenticated reviewer tokens; `false` in strict production.
+- `DEMO_REVIEWER_TOKEN` & `DEMO_VIEWER_TOKEN`: Evaluation bearer tokens.
+- `REVIEWER_TOKENS`: Optional multi-user identity mapping (`token:email` pairs) attributed in immutable audit logs.
+- `INVESTIGATION_RUN_TTL_SECONDS`: Abandoned investigation cleanup timeout (default: `180`s).
+
+---
+
 ## Deployment & Database Migrations
 
 - **Platform Blueprint:** Documented in [`render.yaml`](render.yaml) for Node 20 and Python 3.12 with automated `alembic upgrade head` pre-deploy and startup migration execution.
-- **Production Database Requirement:** Production deployments on Render **must use a hosted PostgreSQL `DATABASE_URL`** (such as [Neon](https://neon.tech)), because the default SQLite filesystem on Render is ephemeral and resets across service redeployments and restarts.
+- **Production Database (Neon PostgreSQL):** The live instance at `https://fairbill-hrrg.onrender.com` runs against a hosted **Neon PostgreSQL** database. This guarantees that schema migrations, dispute cases, telemetry versions, and append-only audit events persist permanently across container restarts and redeployments.
+- **Render Free-Tier Cold-Start Handling:** Render spins down free containers after 15 minutes of inactivity. The first request after an idle window takes **~45 seconds** to boot the container, displaying Render's initialization terminal. All subsequent requests execute in sub-second time. Running an external uptime ping against `/healthz` every 10 minutes keeps the instance hot.
 - **Alembic vs create_all:**
-  - `create_all_tables()` automatically initializes all tables and append-only database triggers for fast local testing and greenfield SQLite setups.
-  - Alembic migrations (`alembic upgrade head`) manage sequential DDL evolutions in production and PostgreSQL environments.
-  - Database seeding (`seed_demo_cases_if_empty`) runs safely and idempotently after migrations on startup, only inserting demo scenarios if the database contains 0 cases.
-- **Multi-User Reviewer Tokens (`REVIEWER_TOKENS`):**
-  - Set `REVIEWER_TOKENS="token_alice:alice@domain.com,token_bob:bob@domain.com"` in `.env` to map specific bearer tokens to individual reviewer identities in the audit log.
+  - `create_all_tables()` initializes tables and append-only database triggers for fast local testing and SQLite setups.
+  - Alembic migrations (`alembic upgrade head`) manage schema evolutions in production and PostgreSQL environments.
+  - Database seeding (`seed_demo_cases_if_empty`) runs idempotently after migrations on startup, inserting demo scenarios only if 0 cases exist.
